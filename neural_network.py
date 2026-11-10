@@ -3,6 +3,7 @@
 from copy import deepcopy
 from dataclasses import dataclass, field
 import math
+from time import perf_counter
 
 import torch
 from torch import nn
@@ -92,6 +93,9 @@ def _run_one_epoch(
     description: str = "Evaluation",
 ) -> dict[str, float]:
     """Accept (images, labels) batches, optionally followed by WILDS metadata."""
+    if device.type == "cuda":
+        torch.cuda.synchronize(device)
+    started_at = perf_counter()
     training = optimizer is not None
     model.train(training)
     total_loss = 0.0
@@ -131,13 +135,17 @@ def _run_one_epoch(
     scores = torch.cat(epoch_scores).numpy()
     # ROC AUC needs both classes. Preserve an undefined value rather than inventing a score.
     auc = float(roc_auc_score(labels, scores)) if len(set(labels)) == 2 else float("nan")
-    return {
+    metrics = {
         "loss": total_loss / total,
         "accuracy": correct / total,
         "f1": float(f1_score(labels, scores >= 0, zero_division=0)),
         "auc": auc,
         "entries": float(total),
     }
+    if device.type == "cuda":
+        torch.cuda.synchronize(device)
+    metrics["elapsed_seconds"] = perf_counter() - started_at
+    return metrics
 
 
 def train_one_epoch(
@@ -148,7 +156,7 @@ def train_one_epoch(
     device: torch.device,
     description: str = "Training",
 ) -> dict[str, float]:
-    """Update weights and return loss, accuracy, F1, ROC AUC, and sample count."""
+    """Update weights and return metrics, sample count, and elapsed seconds."""
     return _run_one_epoch(
         model, train_dataloader, criterion, device, optimizer, description=description
     )
@@ -220,10 +228,12 @@ def train(
                 f"Epoch {epoch}/{train_cfg.epochs} | "
                 f"train loss: {train_metrics['loss']:.4f}, "
                 f"accuracy: {train_metrics['accuracy']:.4f}, "
-                f"F1: {train_metrics['f1']:.4f}, AUC: {train_metrics['auc']:.4f} | "
+                f"F1: {train_metrics['f1']:.4f}, AUC: {train_metrics['auc']:.4f}, "
+                f"time: {train_metrics['elapsed_seconds']:.2f}s | "
                 f"val loss: {val_metrics['loss']:.4f}, "
                 f"accuracy: {val_metrics['accuracy']:.4f}, "
-                f"F1: {val_metrics['f1']:.4f}, AUC: {val_metrics['auc']:.4f}"
+                f"F1: {val_metrics['f1']:.4f}, AUC: {val_metrics['auc']:.4f}, "
+                f"time: {val_metrics['elapsed_seconds']:.2f}s"
             )
             if val_metrics["loss"] < best_val_loss:
                 best_val_loss = val_metrics["loss"]
@@ -241,7 +251,8 @@ def train(
         print(
             f"Test loss: {test_metrics['loss']:.4f}, "
             f"accuracy: {test_metrics['accuracy']:.4f}, "
-            f"F1: {test_metrics['f1']:.4f}, AUC: {test_metrics['auc']:.4f}"
+            f"F1: {test_metrics['f1']:.4f}, AUC: {test_metrics['auc']:.4f}, "
+            f"time: {test_metrics['elapsed_seconds']:.2f}s"
         )
         logger.log_metrics(run_id, {
             **{f"test.{key}": value for key, value in test_metrics.items()},
