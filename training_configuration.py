@@ -18,7 +18,7 @@ class TrainingCFG:
     Component names are case-sensitive PyTorch class names. Scheduler patience
     and early_stopping_patience are integers; scheduler factors are floats.
     Use batch_size when constructing loaders and scheduler_type=None to disable
-    scheduling. Loss functions must accept binary logits and return a mean loss.
+    scheduling. Loss functions must accept multiclass logits and integer class labels and return a mean loss.
     Transform names and parameters come from monai.transforms. PIL images are
     converted to NumPy arrays before the configured steps. Each list defines a
     full pipeline; defaults convert RGB HWC images to CHW float tensors in [0, 1].
@@ -36,7 +36,7 @@ class TrainingCFG:
         unknown = data.keys() - allowed
         assert not unknown, f"Unknown training settings: {sorted(unknown)}"
 
-        self.experiment_name = data.get("experiment_name", "camelyon17-baseline")
+        self.experiment_name = data.get("experiment_name", "isic2019-baseline")
         self.run_name = data.get("run_name", "baseline")
         assert isinstance(self.experiment_name, str) and self.experiment_name
         assert isinstance(self.run_name, str) and self.run_name
@@ -57,7 +57,7 @@ class TrainingCFG:
             torch.optim, data.get("optimizer", "Adam"), torch.optim.Optimizer
         )
         self.optimizer_kwargs = {"lr": 1e-3, **self._kwargs(data, "optimizer_kwargs")}
-        loss_type = self._resolve(nn, data.get("loss_function", "BCEWithLogitsLoss"), nn.Module)
+        loss_type = self._resolve(nn, data.get("loss_function", "CrossEntropyLoss"), nn.Module)
         self.loss_function = loss_type(**self._kwargs(data, "loss_function_kwargs"))
 
         scheduler_name = data.get("scheduler_type", "ReduceLROnPlateau")
@@ -83,6 +83,7 @@ class TrainingCFG:
     def _default_transforms() -> list[dict[str, Any]]:
         return [
             {"EnsureChannelFirst": {"channel_dim": -1}},
+            {"Resize": {"spatial_size": [224, 224]}},
             {"ScaleIntensityRange": {"a_min": 0, "a_max": 255, "b_min": 0, "b_max": 1}},
             {"ToTensor": {"track_meta": False}},
         ]
@@ -125,48 +126,3 @@ class TrainingCFG:
             f"Unknown or unsupported {namespace.__name__} component: {name!r}"
         )
         return component
-
-
-# Complete example: omitted keys would use the defaults defined above.
-data: dict[str, Any] = {
-    "experiment_name": "camelyon17-baseline",
-    "run_name": "baseline-adamw",
-    "epochs": 100,
-    "batch_size": 128,
-    # Optimizer names: "Adam", "AdamW", "SGD", etc.; kwargs must match the optimizer.
-    "optimizer": "AdamW",
-    "optimizer_kwargs": {
-        "lr": 0.01,
-        "weight_decay": 0.001,
-    },
-    "loss_function": "BCEWithLogitsLoss",
-    "loss_function_kwargs": {
-        "reduction": "mean",
-    },
-    # Use None to disable scheduling; kwargs must match the chosen scheduler.
-    "scheduler_type": "ReduceLROnPlateau",
-    "scheduler_kwargs": {
-        "mode": "min",
-        "patience": 3,
-        "factor": 0.1,
-    },
-    "early_stopping_patience": 5,
-    # Absolute validation-loss decrease required from the previous epoch.
-    "early_stopping_tolerance": 0.1,
-    # Each list is a full pipeline, applied in the listed order.
-    "train_transforms": [
-        {"EnsureChannelFirst": {"channel_dim": -1}},
-        {"RandFlip": {"prob": 0.5, "spatial_axis": 1}},
-        {"ScaleIntensityRange": {"a_min": 0, "a_max": 255, "b_min": 0, "b_max": 1}},
-        {"NormalizeIntensity": {"subtrahend": 0.5, "divisor": 0.5}},
-        {"ToTensor": {"track_meta": False}},
-    ],
-    "val_transforms": [
-        {"EnsureChannelFirst": {"channel_dim": -1}},
-        {"ScaleIntensityRange": {"a_min": 0, "a_max": 255, "b_min": 0, "b_max": 1}},
-        {"NormalizeIntensity": {"subtrahend": 0.5, "divisor": 0.5}},
-        {"ToTensor": {"track_meta": False}},
-    ],
-}
-
-train_cfg = TrainingCFG(data)

@@ -101,6 +101,47 @@ class MLflowLogger:
             synchronous=True,
         )
 
+    def log_epoch_metrics(
+        self,
+        run_id: str,
+        metrics: dict[str, float | list[list[int]]],
+        split: str,
+        step: int,
+        class_names: tuple[str, ...],
+    ) -> None:
+        """Log scalars plus labeled confusion-matrix JSON and PNG artifacts.
+
+        Matrix rows are true classes; columns are predicted classes.
+        """
+        from matplotlib.figure import Figure
+        import numpy as np
+
+        self.log_metrics(run_id, {
+            f"{split}.{key}": value for key, value in metrics.items()
+            if key != "confusion_matrix"
+        }, step)
+        matrix = np.asarray(metrics["confusion_matrix"], dtype=int)
+        client = MlflowClient(tracking_uri=self.tracking_uri)
+        artifact = f"confusion_matrices/{split}/epoch_{step:04d}"
+        client.log_dict(run_id, {
+            "class_names": list(class_names),
+            "rows": "true", "columns": "predicted", "counts": matrix.tolist(),
+        }, f"{artifact}.json")
+        figure = Figure(figsize=(9, 8), layout="constrained")
+        axis = figure.subplots()
+        plot = axis.imshow(matrix, cmap="Blues")
+        figure.colorbar(plot, ax=axis)
+        axis.set(
+            xticks=range(len(class_names)), yticks=range(len(class_names)),
+            xticklabels=class_names, yticklabels=class_names,
+            xlabel="Predicted class", ylabel="True class",
+            title=f"{split.capitalize()} confusion matrix — epoch {step}",
+        )
+        for (row, column), count in np.ndenumerate(matrix):
+            axis.text(column, row, str(count), ha="center", va="center",
+                      color="white" if count > matrix.max() / 2 else "black")
+        client.log_figure(run_id, figure, f"{artifact}.png")
+
     def log_model(self, run_id: str, model: nn.Module) -> None:
         """Upload a PyTorch model under runs:/<run_id>/model without an active run."""
         client = MlflowClient(tracking_uri=self.tracking_uri)

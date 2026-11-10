@@ -3,3 +3,8 @@ data
 __pycache__
 mlflow.db
 mlartifacts
+ISIC_2019_Training_Input
+.env
+ISIC_2019_Training_GroundTruth.csv
+ISIC_2019_Training_Metadata.csv
+archive.zip

@@ -1,0 +1,59 @@
+# Training settings. Omitted keys use TrainingCFG defaults.
+# Use scheduler_type: null to disable scheduling.
+# Transform lists define complete pipelines, applied in order.
+# early_stopping_tolerance is the absolute loss decrease from the previous epoch.
+experiment_name: isic2019-baseline
+run_name: baseline-adamw
+epochs: 100
+batch_size: 128
+optimizer: AdamW
+optimizer_kwargs:
+  lr: 0.01
+  weight_decay: 0.001
+loss_function: CrossEntropyLoss
+loss_function_kwargs:
+  reduction: mean
+scheduler_type: ReduceLROnPlateau
+scheduler_kwargs:
+  mode: min
+  patience: 3
+  factor: 0.1
+early_stopping_patience: 5
+early_stopping_tolerance: 0.1
+train_transforms:
+- EnsureChannelFirst:
+    channel_dim: -1
+- Resize:
+    spatial_size:
+    - 224
+    - 224
+- RandFlip:
+    prob: 0.5
+    spatial_axis: 1
+- ScaleIntensityRange:
+    a_min: 0
+    a_max: 255
+    b_min: 0
+    b_max: 1
+- NormalizeIntensity:
+    subtrahend: 0.5
+    divisor: 0.5
+- ToTensor:
+    track_meta: false
+val_transforms:
+- EnsureChannelFirst:
+    channel_dim: -1
+- Resize:
+    spatial_size:
+    - 224
+    - 224
+- ScaleIntensityRange:
+    a_min: 0
+    a_max: 255
+    b_min: 0
+    b_max: 1
+- NormalizeIntensity:
+    subtrahend: 0.5
+    divisor: 0.5
+- ToTensor:
+    track_meta: false
