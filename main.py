@@ -1,4 +1,6 @@
+import torch
 from torch import nn
+from monai.data.utils import worker_init_fn
 from wilds import get_dataset
 from wilds.common.data_loaders import get_eval_loader, get_train_loader
 
@@ -23,16 +25,23 @@ def train_baseline_pipeline() -> nn.Module:
     val_data = dataset.get_subset("val", transform=train_cfg.val_transforms)
     test_data = dataset.get_subset("test", transform=train_cfg.val_transforms)
 
+    loader_kwargs = {
+        "num_workers": 4,
+        "persistent_workers": True,
+        "prefetch_factor": 2,
+        "pin_memory": torch.cuda.is_available(),
+        "worker_init_fn": worker_init_fn,
+    }
     train_loader = get_train_loader(
-        "standard", train_data, batch_size=train_cfg.batch_size
+        "standard", train_data, batch_size=train_cfg.batch_size, **loader_kwargs
     )
     assert train_loader is not None, "Failed to initialize the training dataloader."
     val_loader = get_eval_loader(
-        "standard", val_data, batch_size=train_cfg.batch_size
+        "standard", val_data, batch_size=train_cfg.batch_size, **loader_kwargs
     )
     assert val_loader is not None, "Failed to initialize the validation dataloader."
     test_loader = get_eval_loader(
-        "standard", test_data, batch_size=train_cfg.batch_size
+        "standard", test_data, batch_size=train_cfg.batch_size, **loader_kwargs
     )
     assert test_loader is not None, "Failed to initialize the test dataloader."
 
@@ -42,4 +51,7 @@ def train_baseline_pipeline() -> nn.Module:
 
 
 if __name__ == "__main__":
-    trained_model = train_baseline_pipeline()
+    try:
+        trained_model = train_baseline_pipeline()
+    except KeyboardInterrupt:
+        print("Pipeline stopped by user (user_ended_pipeline).")

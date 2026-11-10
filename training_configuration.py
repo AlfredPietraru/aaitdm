@@ -48,7 +48,7 @@ class TrainingCFG:
             data.get("val_transforms", self._default_transforms())
         )
         self.epochs = self._positive_int(data, "epochs", 10)
-        self.batch_size = self._positive_int(data, "batch_size", 32)
+        self.batch_size = self._positive_int(data, "batch_size", 128)
         self.early_stopping_patience = self._positive_int(
             data, "early_stopping_patience", 7
         )
@@ -132,7 +132,7 @@ data: dict[str, Any] = {
     "experiment_name": "camelyon17-baseline",
     "run_name": "baseline-adamw",
     "epochs": 100,
-    "batch_size": 64,
+    "batch_size": 128,
     # Optimizer names: "Adam", "AdamW", "SGD", etc.; kwargs must match the optimizer.
     "optimizer": "AdamW",
     "optimizer_kwargs": {

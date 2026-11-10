@@ -203,6 +203,7 @@ def train(
         best_val_loss = float("inf")
         best_state = None
         best_epoch = 0
+        early_stopped = False
 
         for epoch in range(1, train_cfg.epochs + 1):
             train_metrics = train_one_epoch(
@@ -240,6 +241,8 @@ def train(
                 best_state = deepcopy(model.state_dict())
                 best_epoch = epoch
             if early_stopper.step(val_metrics["loss"]):
+                early_stopped = True
+                logger.log_tags(run_id, {"stop_reason": "early_stopper_enabled"})
                 print(f"Early stopping after {epoch} epochs.")
                 break
 
@@ -259,7 +262,7 @@ def train(
             "best_val_loss": best_val_loss,
             "best_epoch": best_epoch,
             "epochs_completed": epoch,
-            "early_stopped": float(epoch < train_cfg.epochs),
+            "early_stopped": float(early_stopped),
         }, step=epoch)
         logger.log_model(run_id, model)
         return model

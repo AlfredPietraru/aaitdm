@@ -37,13 +37,33 @@ class MLflowLogger:
             else client.create_experiment(cfg.experiment_name)
         )
         run_id = client.create_run(experiment_id, run_name=cfg.run_name).info.run_id
-        finished = False
+        status = "FAILED"
         try:
             self.log_configuration(run_id, cfg)
+            self.log_tags(run_id, {"stop_reason": "running"})
             yield run_id
-            finished = True
+            status = "FINISHED"
+            if client.get_run(run_id).data.tags.get("stop_reason") == "running":
+                self.log_tags(run_id, {"stop_reason": "completed"})
+        except KeyboardInterrupt:
+            status = "KILLED"
+            self.log_tags(run_id, {"stop_reason": "user_ended_pipeline"})
+            raise
+        except Exception as error:
+            self.log_tags(run_id, {
+                "stop_reason": "pipeline_error",
+                "error_type": type(error).__name__,
+                "error_message": str(error)[:1000],
+            })
+            raise
         finally:
-            client.set_terminated(run_id, status="FINISHED" if finished else "FAILED")
+            client.set_terminated(run_id, status=status)
+
+    def log_tags(self, run_id: str, tags: dict[str, str]) -> None:
+        """Attach descriptive metadata to an explicitly selected run."""
+        client = MlflowClient(tracking_uri=self.tracking_uri)
+        for key, value in tags.items():
+            client.set_tag(run_id, key, value)
 
     def log_configuration(self, run_id: str, cfg: TrainingCFG) -> None:
         client = MlflowClient(tracking_uri=self.tracking_uri)
