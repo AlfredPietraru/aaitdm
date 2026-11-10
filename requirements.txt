@@ -22,6 +22,7 @@ annotated-doc==0.0.6
 annotated-types==0.8.0
 anyio==4.16.0
 attrs==26.1.0
+bleach==6.4.0
 blinker==1.9.0
 builtin-interfaces==2.3.2
 cachetools==7.3.0
@@ -55,6 +56,7 @@ examples-rclpy-minimal-publisher==0.20.6
 examples-rclpy-minimal-service==0.20.6
 examples-rclpy-minimal-subscriber==0.20.6
 fastapi==0.162.4
+fastjsonschema==2.22.3
 filelock==4.2.10
 Flask==3.1.3
 flask-cors==6.0.5
@@ -79,6 +81,12 @@ interactive-markers==2.7.1
 itsdangerous==2.2.0
 Jinja2==3.1.6
 joblib==1.6.0
+jsonschema==4.26.0
+jsonschema-specifications==2025.9.1
+jupyter_core==5.9.1
+jupytext==1.19.6
+kaggle==2.2.5
+kagglesdk==0.1.38
 kiwisolver==1.5.1
 laser-geometry==2.10.2
 launch==3.8.7
@@ -93,8 +101,11 @@ littleutils==0.2.4
 logging-demo==0.36.5
 Mako==1.4.3
 map-msgs==2.5.0
+markdown-it-py==4.3.0
 MarkupSafe==3.0.4
 matplotlib==3.11.2
+mdit-py-plugins==0.7.0
+mdurl==0.1.2
 message-filters==7.1.10
 mlflow==3.18.0
 mlflow-skinny==3.18.0
@@ -104,6 +115,7 @@ mpmath==1.3.0
 multidict==7.2.1
 narwhals==2.28.0
 nav-msgs==5.5.2
+nbformat==5.11.1
 networkx==3.7
 numpy==2.5.4
 nvidia-cublas==13.4.1.3
@@ -135,6 +147,7 @@ pandas==3.1.1
 pcl-msgs==1.0.0
 pendulum-msgs==0.36.5
 pillow==13.0.0
+platformdirs==4.14.5
 prettytable==3.18.0
 propcache==0.5.4
 protobuf==7.36.2
@@ -149,6 +162,7 @@ python-dateutil==2.9.0.post0
 python-dotenv==1.2.4
 python-multipart==0.0.33
 python-qt-binding==2.3.2
+python-slugify==9.1.3
 pytz==2026.6
 PyYAML==6.0.3
 qt-dotgraph==2.9.3
@@ -159,6 +173,7 @@ quality-of-service-demo-py==0.36.5
 rcl-interfaces==2.3.2
 rclpy==9.1.5
 rcutils==6.9.10
+referencing==0.37.0
 requests==2.34.2
 resource-retriever==3.7.1
 rmw-dds-common==5.0.0
@@ -202,6 +217,7 @@ rosidl-typesupport-fastrtps-c==3.8.2
 rosidl-typesupport-fastrtps-cpp==3.8.2
 rosidl-typesupport-introspection-c==4.9.6
 rosidl-typesupport-introspection-cpp==4.9.6
+rpds-py==2026.9.1
 rpyutils==0.6.3
 rqt==1.9.2
 rqt-action==2.3.0
@@ -252,6 +268,7 @@ std-srvs==5.5.2
 stereo-msgs==5.5.2
 sympy==1.14.0
 teleop-twist-keyboard==2.4.1
+text-unidecode==1.3
 tf2-geometry-msgs==0.41.7
 tf2-kdl==0.41.7
 tf2-msgs==0.41.7
@@ -264,6 +281,7 @@ topic-monitor==0.36.5
 torch==2.15.0
 torchvision==0.29.2
 tqdm==4.70.1
+traitlets==5.16.1
 trajectory-msgs==5.5.2
 triton==3.9.0
 turtlesim-msgs==1.9.4
@@ -277,6 +295,7 @@ urllib3==2.8.0
 uvicorn==0.54.0
 visualization-msgs==5.5.2
 wcwidth==0.9.4
+webencodings==0.6.1
 Werkzeug==3.1.9
 wheel==0.48.0
 wilds==2.0.1
