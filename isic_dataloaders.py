@@ -134,8 +134,6 @@ class ISICDataLoaders:
         (0.1, 0.03, 0.03) uses approximately 16% of images. Very small splits
         must still have enough groups to represent all eight classes.
         """
-        assert isinstance(train_cfg, TrainingCFG), "train_cfg must be a TrainingCFG instance."
-        split_ratios = train_cfg.split_ratios
         seed = train_cfg.seed
         num_workers = train_cfg.num_workers
         loader_kwargs = {
@@ -145,6 +143,31 @@ class ISICDataLoaders:
             "pin_memory": torch.cuda.is_available(),
             "worker_init_fn": worker_init_fn,
         }
+        datasets = self.get_datasets_baseline_experiment(train_cfg=train_cfg)
+
+        train_loader, val_loader, test_loader = (
+            DataLoader(
+                dataset, batch_size=train_cfg.batch_size, shuffle=(index == 0),
+                **loader_kwargs,
+                generator=torch.Generator().manual_seed(seed + index),
+            )
+            for index, dataset in enumerate(datasets)
+        )
+
+        return train_loader, val_loader, test_loader
+
+    def get_datasets_baseline_experiment(
+        self,
+        *,
+        train_cfg: TrainingCFG,
+    ) -> tuple[ISICDataset, ISICDataset, ISICDataset]:
+        """Return the lesion-separated train, validation, and test datasets.
+
+        Uses the same split rules as get_dataloaders_baseline_experiment.
+        """
+        assert isinstance(train_cfg, TrainingCFG), "train_cfg must be a TrainingCFG instance."
+        split_ratios = train_cfg.split_ratios
+        seed = train_cfg.seed
 
         samples = [(path, label) for path, label, _ in self.samples]
         groups = []
@@ -203,13 +226,4 @@ class ISICDataLoaders:
                 transform=transform,
             ))
 
-        train_loader, val_loader, test_loader = (
-            DataLoader(
-                dataset, batch_size=train_cfg.batch_size, shuffle=(index == 0),
-                **loader_kwargs,
-                generator=torch.Generator().manual_seed(seed + index),
-            )
-            for index, dataset in enumerate(datasets)
-        )
-
-        return train_loader, val_loader, test_loader
+        return tuple(datasets)

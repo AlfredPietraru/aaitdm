@@ -1,0 +1,3 @@
+outputs/
+.flwr/
+__pycache__/
