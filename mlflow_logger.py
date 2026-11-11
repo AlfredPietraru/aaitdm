@@ -4,6 +4,9 @@ from contextlib import contextmanager
 from tempfile import TemporaryDirectory
 from pathlib import Path
 import os
+import json
+import math
+import yaml
 from typing import Any
 from collections.abc import Iterator
 
@@ -88,7 +91,14 @@ class MLflowLogger:
             client.log_param(run_id, key, value)
         client.log_text(
             run_id,
-            f"Train: {cfg.train_transforms}\nValidation: {cfg.val_transforms}",
+            yaml.safe_dump({
+                "train_transforms": cfg.data.get(
+                    "train_transforms", cfg._default_transforms()
+                ),
+                "val_transforms": cfg.data.get(
+                    "val_transforms", cfg._default_transforms()
+                ),
+            }, sort_keys=False),
             "transforms.txt",
         )
 
@@ -102,6 +112,43 @@ class MLflowLogger:
             run_id,
             metrics=[Metric(key, float(value), timestamp, step) for key, value in metrics.items()],
             synchronous=True,
+        )
+
+    def log_training_history(
+        self, run_id: str, epochs: list[dict[str, Any]],
+        summary: dict[str, Any], test_metrics: dict[str, Any] | None = None,
+        *, cfg: TrainingCFG,
+    ) -> None:
+        """Save versioned JSON in training_history.txt for cross-run analysis.
+
+        Epochs are one-based. Use pandas.json_normalize(report["epochs"]) for
+        columns such as epoch, train.loss, and validation.macro_f1. Undefined
+        metrics are JSON null, which pandas can interpret as missing values.
+        """
+        def json_safe(value):
+            if isinstance(value, float) and not math.isfinite(value):
+                return None
+            if isinstance(value, dict):
+                return {key: json_safe(item) for key, item in value.items()}
+            if isinstance(value, (list, tuple)):
+                return [json_safe(item) for item in value]
+            return value
+
+        report = {
+            "schema_version": 1,
+            "run_id": run_id,
+            "experiment_name": cfg.experiment_name,
+            "run_name": cfg.run_name,
+            "seed": cfg.seed,
+            "configuration": cfg.data,
+            "epochs": epochs,
+            "summary": summary,
+            "test": test_metrics,
+        }
+        client = MlflowClient(tracking_uri=self.tracking_uri)
+        client.log_text(
+            run_id, json.dumps(json_safe(report), indent=2, allow_nan=False) + "\n",
+            "training_history.txt",
         )
 
     def log_epoch_metrics(

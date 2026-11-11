@@ -70,7 +70,7 @@ class TrainingCFG:
         self.early_stopping_patience = self._positive_int(
             data, "early_stopping_patience", 7
         )
-        self.early_stopping_tolerance = data.get("early_stopping_tolerance", 0.1)
+        self.early_stopping_tolerance = data.get("early_stopping_tolerance", 0.0)
         self.optimizer = self._resolve(
             torch.optim, data.get("optimizer", "Adam"), torch.optim.Optimizer
         )

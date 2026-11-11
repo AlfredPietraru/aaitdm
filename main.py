@@ -3,9 +3,10 @@ from typing import Any
 
 import yaml
 from torch import nn
+from torchvision.models import ResNet18_Weights, resnet18
 from isic_dataloaders import CLASS_NAMES, ISICDataLoaders
 
-from neural_network import MulticlassClassifier, train
+from neural_network import train
 from mlflow_logger import MLflowLogger
 from training_configuration import TrainingCFG
 from reproducibility import set_seed
@@ -31,7 +32,8 @@ def train_baseline_pipeline() -> nn.Module:
         train_cfg=train_cfg,
     )
     print("Preparing dataloaders completed...")
-    model = MulticlassClassifier(num_classes=len(CLASS_NAMES))
+    model = resnet18(weights=ResNet18_Weights.IMAGENET1K_V1)
+    model.fc = nn.Linear(model.fc.in_features, len(CLASS_NAMES))
     logger = MLflowLogger()
     print("Starting training pipeline...")
     return train(model, train_cfg, train_loader, val_loader, test_loader, logger)

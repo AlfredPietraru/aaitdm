@@ -16,15 +16,17 @@ from mlflow_logger import MLflowLogger
 
 @dataclass
 class EarlyStopper:
-    """Require an absolute loss drop of at least tolerance from the previous epoch.
+    """Stop after patience epochs without improving the best accepted loss.
 
     The first validation establishes the baseline. Smaller improvements, ties,
-    and regressions count toward patience. A zero tolerance still requires a drop.
+    and regressions count toward patience. With tolerance=0, every new minimum
+    resets patience. Positive tolerance requires that much cumulative improvement
+    over the last accepted best loss before resetting.
     """
 
     patience: int = 7
-    tolerance: float = 0.1
-    previous_loss: float | None = field(default=None, init=False)
+    tolerance: float = 0.0
+    best_loss: float | None = field(default=None, init=False)
     bad_epochs: int = field(default=0, init=False)
 
     def __post_init__(self) -> None:
@@ -34,17 +36,17 @@ class EarlyStopper:
 
     def step(self, val_loss: float) -> bool:
         assert math.isfinite(val_loss), "Validation loss must be finite."
-        if self.previous_loss is None or (
-            val_loss < self.previous_loss
+        if self.best_loss is None or (
+            val_loss < self.best_loss
             and (
-                self.previous_loss - val_loss >= self.tolerance
-                or math.isclose(self.previous_loss - val_loss, self.tolerance, rel_tol=1e-12)
+                self.best_loss - val_loss >= self.tolerance
+                or math.isclose(self.best_loss - val_loss, self.tolerance, rel_tol=1e-12)
             )
         ):
             self.bad_epochs = 0
+            self.best_loss = val_loss
         else:
             self.bad_epochs += 1
-        self.previous_loss = val_loss
         return self.bad_epochs >= self.patience
 
 
@@ -244,6 +246,7 @@ def train(
         best_state = None
         best_epoch = 0
         early_stopped = False
+        epoch_history = []
         for epoch in range(1, train_cfg.epochs + 1):
             train_metrics = train_one_epoch(
                 model, train_dataloader, optimizer, criterion, device,
@@ -259,10 +262,11 @@ def train(
             logger.log_epoch_metrics(run_id, val_metrics, "val", epoch,
                                      getattr(val_dataloader.dataset, "class_names",
                                              tuple(map(str, range(len(val_metrics["confusion_matrix"]))))))
-            logger.log_metrics(run_id, {
-                **{f"learning_rate.group_{i}": group["lr"]
-                   for i, group in enumerate(optimizer.param_groups)},
-            }, step=epoch)
+            learning_rates = {
+                f"learning_rate.group_{i}": group["lr"]
+                for i, group in enumerate(optimizer.param_groups)
+            }
+            logger.log_metrics(run_id, learning_rates, step=epoch)
             assert math.isfinite(val_metrics["loss"]), "Validation loss must be finite."
             if isinstance(scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau):
                 scheduler.step(val_metrics["loss"])
@@ -283,8 +287,25 @@ def train(
                 best_val_loss = val_metrics["loss"]
                 best_state = deepcopy(model.state_dict())
                 best_epoch = epoch
-            if early_stopper.step(val_metrics["loss"]):
-                early_stopped = True
+            early_stopped = early_stopper.step(val_metrics["loss"])
+            epoch_history.append({
+                "epoch": epoch,
+                "train": train_metrics,
+                "validation": val_metrics,
+                "learning_rates": learning_rates,
+                "early_stopping_counter": early_stopper.bad_epochs,
+                "early_stopping_reference_loss": early_stopper.best_loss,
+            })
+            summary = {
+                "best_epoch": best_epoch,
+                "best_val_loss": best_val_loss,
+                "epochs_completed": epoch,
+                "early_stopped": early_stopped,
+                "early_stopping_patience": early_stopper.patience,
+                "early_stopping_tolerance": early_stopper.tolerance,
+            }
+            logger.log_training_history(run_id, epoch_history, summary, cfg=train_cfg)
+            if early_stopped:
                 logger.log_tags(run_id, {"stop_reason": "early_stopper_enabled"})
                 print(f"Early stopping after {epoch} epochs.")
                 break
@@ -304,10 +325,8 @@ def train(
                                  getattr(test_dataloader.dataset, "class_names",
                                              tuple(map(str, range(len(test_metrics["confusion_matrix"]))))))
         logger.log_metrics(run_id, {
-            "best_val_loss": best_val_loss,
-            "best_epoch": best_epoch,
             "epochs_completed": epoch,
-            "early_stopped": float(early_stopped),
         }, step=epoch)
+        logger.log_training_history(run_id, epoch_history, summary, test_metrics, cfg=train_cfg)
         logger.log_model(run_id, model)
         return model

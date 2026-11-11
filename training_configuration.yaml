@@ -1,9 +1,9 @@
 # Training settings. Omitted keys use TrainingCFG defaults.
 # Use scheduler_type: null to disable scheduling.
 # Transform lists define complete pipelines, applied in order.
-# early_stopping_tolerance is the absolute loss decrease from the previous epoch.
+# Minimum loss decrease from the last accepted best to reset patience (0 accepts any decrease).
 experiment_name: isic2019-baseline
-run_name: baseline-adamw
+run_name: resnet18-imagenet-finetune
 epochs: 100
 batch_size: 128
 num_workers: 4
@@ -12,7 +12,7 @@ seed: 42
 split_ratios: [0.3, 0.1, 0.1]
 optimizer: AdamW
 optimizer_kwargs:
-  lr: 0.01
+  lr: 0.0001
   weight_decay: 0.001
 loss_function: CrossEntropyLoss
 loss_function_kwargs:
@@ -22,8 +22,8 @@ scheduler_kwargs:
   mode: min
   patience: 3
   factor: 0.1
-early_stopping_patience: 5
-early_stopping_tolerance: 0.1
+early_stopping_patience: 6
+early_stopping_tolerance: 0.01
 train_transforms:
 - EnsureChannelFirst:
     channel_dim: -1
@@ -40,8 +40,9 @@ train_transforms:
     b_min: 0
     b_max: 1
 - NormalizeIntensity:
-    subtrahend: 0.5
-    divisor: 0.5
+    subtrahend: [0.485, 0.456, 0.406]
+    divisor: [0.229, 0.224, 0.225]
+    channel_wise: true
 - ToTensor:
     track_meta: false
 val_transforms:
@@ -57,7 +58,8 @@ val_transforms:
     b_min: 0
     b_max: 1
 - NormalizeIntensity:
-    subtrahend: 0.5
-    divisor: 0.5
+    subtrahend: [0.485, 0.456, 0.406]
+    divisor: [0.229, 0.224, 0.225]
+    channel_wise: true
 - ToTensor:
     track_meta: false
