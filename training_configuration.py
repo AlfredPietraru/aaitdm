@@ -12,6 +12,8 @@ import numpy as np
 import torch
 from torch import nn
 
+from losses import FocalLoss
+
 
 class TrainingCFG:
     """Resolve dictionary settings into PyTorch training components.
@@ -79,7 +81,8 @@ class TrainingCFG:
             torch.optim, data.get("optimizer", "Adam"), torch.optim.Optimizer
         )
         self.optimizer_kwargs = {"lr": 1e-3, **self._kwargs(data, "optimizer_kwargs")}
-        loss_type = self._resolve(nn, data.get("loss_function", "CrossEntropyLoss"), nn.Module)
+        loss_name = data.get("loss_function", "CrossEntropyLoss")
+        loss_type = FocalLoss if loss_name == "FocalLoss" else self._resolve(nn, loss_name, nn.Module)
         self.loss_function = loss_type(**self._kwargs(data, "loss_function_kwargs"))
 
         scheduler_name = data.get("scheduler_type", "ReduceLROnPlateau")
