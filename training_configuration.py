@@ -1,6 +1,7 @@
 """Dictionary-based training configuration and transform pipelines."""
 
 from copy import deepcopy
+import math
 from typing import Any
 
 import monai.transforms as monai_transforms
@@ -28,7 +29,7 @@ class TrainingCFG:
         assert isinstance(data, dict), "TrainingCFG expects a dictionary."
         self.data = deepcopy(data)
         allowed = {
-            "optimizer", "optimizer_kwargs", "batch_size", "loss_function",
+            "optimizer", "optimizer_kwargs", "batch_size", "num_workers", "seed", "split_ratios", "loss_function",
             "loss_function_kwargs", "epochs", "scheduler_type", "scheduler_kwargs",
             "early_stopping_patience", "early_stopping_tolerance",
             "train_transforms", "val_transforms", "experiment_name", "run_name",
@@ -49,6 +50,23 @@ class TrainingCFG:
         )
         self.epochs = self._positive_int(data, "epochs", 10)
         self.batch_size = self._positive_int(data, "batch_size", 128)
+        self.num_workers = data.get("num_workers", 4)
+        assert type(self.num_workers) is int and self.num_workers >= 0, (
+            "num_workers must be a non-negative integer."
+        )
+        self.seed = data.get("seed", 42)
+        assert type(self.seed) is int and 0 <= self.seed < 2**32, (
+            "seed must be a 32-bit unsigned integer."
+        )
+        split_ratios = data.get("split_ratios", (0.7, 0.15, 0.15))
+        assert (
+            isinstance(split_ratios, (list, tuple))
+            and len(split_ratios) == 3
+            and all(type(x) in (int, float) and 0 < x < 1 for x in split_ratios)
+            and (sum(split_ratios) <= 1
+                 or math.isclose(sum(split_ratios), 1, rel_tol=0, abs_tol=1e-12))
+        ), "split_ratios must be three positive fractions summing to at most 1."
+        self.split_ratios: tuple[float, float, float] = tuple(split_ratios)
         self.early_stopping_patience = self._positive_int(
             data, "early_stopping_patience", 7
         )

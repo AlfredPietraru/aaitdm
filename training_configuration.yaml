@@ -6,6 +6,10 @@ experiment_name: isic2019-baseline
 run_name: baseline-adamw
 epochs: 100
 batch_size: 128
+num_workers: 4
+seed: 42
+# Train, validation, test fractions; remaining data is unused.
+split_ratios: [0.3, 0.1, 0.1]
 optimizer: AdamW
 optimizer_kwargs:
   lr: 0.01

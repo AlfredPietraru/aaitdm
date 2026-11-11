@@ -4,7 +4,6 @@ import csv
 import math
 from collections import Counter, defaultdict
 from pathlib import Path
-from collections.abc import Callable
 
 import numpy as np
 from PIL import Image
@@ -12,6 +11,8 @@ from sklearn.model_selection import train_test_split
 import torch
 from torch.utils.data import DataLoader, Dataset
 from monai.data.utils import worker_init_fn
+
+from training_configuration import TrainingCFG
 
 
 CLASS_NAMES = ("MEL", "NV", "BCC", "AK", "BKL", "DF", "VASC", "SCC")
@@ -111,52 +112,30 @@ class ISICDataLoaders:
     def get_dataloaders_baseline_experiment(
         self,
         *,
-        split_ratios: tuple[float, float, float] = (0.7, 0.15, 0.15),
-        batch_size: int = 32,
-        seed: int = 42,
-        num_workers: int = 0,
-        train_transform: Callable | None = None,
-        eval_transform: Callable | None = None,
-        image_size: tuple[int, int] = (224, 224),
-        pin_memory: bool = False,
-        persistent_workers: bool | None = None,
-        prefetch_factor: int | None = None,
-        worker_init_fn: Callable | None = worker_init_fn,
+        train_cfg: TrainingCFG,
     ) -> tuple[DataLoader, DataLoader, DataLoader]:
         """Split stored records and return fresh train, validation, test loaders.
 
         Each batch is (images, labels). Dataset samples expose (path, label)
         pairs; self.samples also retains the full CSV metadata as strings.
+        TrainingCFG supplies split ratios, batch size, seed, workers, and transforms.
         Repeated calls can use different settings without rereading the CSVs.
         Ratios are fractions of all lesion groups, not relative weights. Their
         sum may be below 1; remaining groups are unused. For example,
         (0.1, 0.03, 0.03) uses approximately 16% of images. Very small splits
         must still have enough groups to represent all eight classes.
         """
-        assert (
-            len(split_ratios) == 3
-            and all(0 < x < 1 for x in split_ratios)
-            and (sum(split_ratios) <= 1
-                 or math.isclose(sum(split_ratios), 1, rel_tol=0, abs_tol=1e-12))
-        ), (
-            'split_ratios must be three positive fractions summing to at most 1.'
-        )
-        assert batch_size >= 1 and num_workers >= 0, (
-            'batch_size must be positive and num_workers nonnegative.'
-        )
-        assert len(image_size) == 2 and all(type(x) is int and x >= 1 for x in image_size), (
-            'image_size must contain two positive integers.'
-        )
-
-        if persistent_workers is None:
-            persistent_workers = num_workers > 0
-        assert not persistent_workers or num_workers > 0, (
-            'persistent_workers requires num_workers > 0.'
-        )
-        if prefetch_factor is not None:
-            assert num_workers > 0 and type(prefetch_factor) is int and prefetch_factor >= 1, (
-                'prefetch_factor requires workers and a positive integer.'
-            )
+        assert isinstance(train_cfg, TrainingCFG), "train_cfg must be a TrainingCFG instance."
+        split_ratios = train_cfg.split_ratios
+        seed = train_cfg.seed
+        num_workers = train_cfg.num_workers
+        loader_kwargs = {
+            "num_workers": num_workers,
+            "persistent_workers": num_workers > 0,
+            "prefetch_factor": 2 if num_workers > 0 else None,
+            "pin_memory": torch.cuda.is_available(),
+            "worker_init_fn": worker_init_fn,
+        }
 
         samples = [(path, label) for path, label, _ in self.samples]
         groups = []
@@ -198,7 +177,7 @@ class ISICDataLoaders:
         datasets = []
         for selected, transform in zip(
             (train_groups, val_groups, test_groups),
-            (train_transform, eval_transform, eval_transform),
+            (train_cfg.train_transforms, train_cfg.val_transforms, train_cfg.val_transforms),
         ):
             indices = sorted(i for group in selected for i in group_indices[group])
             assert {samples[i][1] for i in indices} == set(range(len(CLASS_NAMES))), (
@@ -206,15 +185,13 @@ class ISICDataLoaders:
             )
             datasets.append(ISICDataset(
                 [samples[i] for i in indices], [groups[i] for i in indices],
-                transform, image_size,
+                transform=transform,
             ))
 
         train_loader, val_loader, test_loader = (
             DataLoader(
-                dataset, batch_size=batch_size, shuffle=(index == 0),
-                num_workers=num_workers, pin_memory=pin_memory,
-                persistent_workers=persistent_workers, prefetch_factor=prefetch_factor,
-                worker_init_fn=worker_init_fn,
+                dataset, batch_size=train_cfg.batch_size, shuffle=(index == 0),
+                **loader_kwargs,
                 generator=torch.Generator().manual_seed(seed + index),
             )
             for index, dataset in enumerate(datasets)
