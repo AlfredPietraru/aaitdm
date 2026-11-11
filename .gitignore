@@ -5,6 +5,7 @@ mlflow.db
 mlartifacts
 ISIC_2019_Training_Input
 .env
+venv
 ISIC_2019_Training_GroundTruth.csv
 ISIC_2019_Training_Metadata.csv
 archive.zip
