@@ -1,0 +1,47 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "fl-isic"
+version = "1.0.0"
+description = "Minimal Flower FedAvg/FedProx experiment on ISIC 2019 with simulated hospitals"
+license = "Apache-2.0"
+dependencies = [
+    "flwr==1.43.0",
+    "torch==2.15.0",
+    "torchvision==0.29.2",
+    "monai==1.6.1",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["fl_isic"]
+
+[tool.flwr.app]
+publisher = "aitdm"
+
+[tool.flwr.app.components]
+serverapp = "fl_isic.server_app:app"
+clientapp = "fl_isic.client_app:app"
+
+# Override any value at launch, e.g. ./run_federated.sh num-server-rounds=10 proximal-mu=0.01
+[tool.flwr.app.config]
+num-server-rounds = 10
+local-epochs = 2
+fraction-train = 1.0
+# Number of clients the server waits for; run_federated.sh sets it to NUM_CLIENTS.
+min-nodes = 3
+# 0.0 runs FedAvg; a positive value runs FedProx with this mu.
+proximal-mu = 0.0
+# "iid" or "dirichlet" (label skew; smaller alpha = more non-IID).
+partitioning = "dirichlet"
+dirichlet-alpha = 0.5
+# Same lesion-group split as the centralized baseline in training_configuration.yaml.
+# Clients get shares of train and val; the test split is held back and never used here.
+train-fraction = 0.3
+val-fraction = 0.1
+test-fraction = 0.1
+batch-size = 32
+learning-rate = 0.0001
+num-workers = 2
+seed = 42
