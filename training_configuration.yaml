@@ -3,16 +3,19 @@
 # Transform lists define complete pipelines, applied in order.
 # Minimum loss decrease from the last accepted best to reset patience (0 accepts any decrease).
 experiment_name: isic2019-baseline
-run_name: resnet18-imagenet-finetune
+run_name: resnet18-sgd-center-crop
 epochs: 100
 batch_size: 128
 num_workers: 4
 seed: 42
 # Train, validation, test fractions; remaining data is unused.
-split_ratios: [0.3, 0.1, 0.1]
-optimizer: AdamW
+split_ratios: [0.6, 0.1, 0.1]
+# Training only: double AK/DF/VASC/SCC and remove 60% of NV entries.
+oversample_classes: False
+optimizer: SGD
 optimizer_kwargs:
   lr: 0.0001
+  momentum: 0.9
   weight_decay: 0.001
 loss_function: CrossEntropyLoss
 loss_function_kwargs:
@@ -21,19 +24,34 @@ scheduler_type: ReduceLROnPlateau
 scheduler_kwargs:
   mode: min
   patience: 3
-  factor: 0.1
-early_stopping_patience: 6
+  factor: 0.5
+early_stopping_patience: 10
 early_stopping_tolerance: 0.01
 train_transforms:
 - EnsureChannelFirst:
     channel_dim: -1
 - Resize:
-    spatial_size:
-    - 224
-    - 224
+    spatial_size: [512, 512]
+# Restrict the final crop center to +/-32 pixels around the image center.
+- CenterSpatialCrop:
+    roi_size: [288, 288]
+- RandSpatialCrop:
+    roi_size: [224, 224]
+    random_center: true
+    random_size: false
+
+- RandFlip:
+    prob: 0.5
+    spatial_axis: 0
+
 - RandFlip:
     prob: 0.5
     spatial_axis: 1
+
+- RandRotate90:
+    prob: 0.5
+    max_k: 3
+
 - ScaleIntensityRange:
     a_min: 0
     a_max: 255
@@ -49,9 +67,9 @@ val_transforms:
 - EnsureChannelFirst:
     channel_dim: -1
 - Resize:
-    spatial_size:
-    - 224
-    - 224
+    spatial_size: [512, 512]
+- CenterSpatialCrop:
+    roi_size: [224, 224]
 - ScaleIntensityRange:
     a_min: 0
     a_max: 255

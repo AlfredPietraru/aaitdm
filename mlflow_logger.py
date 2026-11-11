@@ -79,6 +79,7 @@ class MLflowLogger:
             "num_workers": cfg.num_workers,
             "seed": cfg.seed,
             "split_ratios": cfg.split_ratios,
+            "oversample_classes": cfg.oversample_classes,
             "optimizer": cfg.optimizer.__name__,
             "loss_function": type(cfg.loss_function).__name__,
             "scheduler": cfg.scheduler_type.__name__ if cfg.scheduler_type else "None",
@@ -191,6 +192,35 @@ class MLflowLogger:
             axis.text(column, row, str(count), ha="center", va="center",
                       color="white" if count > matrix.max() / 2 else "black")
         client.log_figure(run_id, figure, f"{artifact}.png")
+        figure.clear()
+
+        # Row sums count true-class examples; diagonal entries are correct predictions.
+        encountered = matrix.sum(axis=1)
+        correct = matrix.diagonal()
+        figure = Figure(figsize=(11, 6), layout="constrained")
+        axis = figure.subplots()
+        positions = np.arange(len(class_names))
+        axis.bar(positions, encountered, width=0.7, color="#4477AA",
+                 label="Images encountered")
+        axis.bar(positions, correct, width=0.4, color="#228833",
+                 label="Correctly classified")
+        offset = max(int(encountered.max()), 1) * 0.025
+        for index, (total, matched) in enumerate(zip(encountered, correct)):
+            percentage = f"{100 * matched / total:.1f}%" if total else "N/A"
+            axis.text(index, total + offset, f"{matched}/{total}\n{percentage}",
+                      ha="center", va="bottom", fontsize=10)
+        axis.set(
+            xticks=positions, xticklabels=class_names,
+            xlabel="True class", ylabel="Number of images",
+            title=f"{split.capitalize()} correct predictions by class — epoch {step}\n"
+                  "Labels: correct / encountered and per-class recall",
+            ylim=(0, max(int(encountered.max()), 1) * 1.25),
+        )
+        axis.legend()
+        client.log_figure(
+            run_id, figure, f"class_recall/{split}/epoch_{step:04d}.png"
+        )
+        figure.clear()
 
     def log_model(self, run_id: str, model: nn.Module) -> None:
         """Upload a PyTorch model under runs:/<run_id>/model without an active run."""

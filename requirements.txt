@@ -175,6 +175,7 @@ rclpy==9.1.5
 rcutils==6.9.10
 referencing==0.37.0
 requests==2.34.2
+gdown>=5.2,<6
 resource-retriever==3.7.1
 rmw-dds-common==5.0.0
 rmw-test-fixture-implementation==0.14.7

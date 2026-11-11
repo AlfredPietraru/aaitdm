@@ -5,6 +5,7 @@ Run from any directory:
 """
 
 import argparse
+import logging
 import csv
 from pathlib import Path
 import random
@@ -18,6 +19,8 @@ import yaml
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
+
+from app_logging import configure_logging
 
 from isic_dataloaders import CLASS_NAMES, ISICDataLoaders
 from training_configuration import TrainingCFG
@@ -46,6 +49,7 @@ def save_samples(
     using the configuration seed. Originals are copied unchanged; overview
     figures contain resized previews. manifest.csv records image provenance.
     """
+    configure_logging()
     assert type(samples_per_class) is int and samples_per_class > 0, (
         "samples_per_class must be a positive integer."
     )
@@ -56,6 +60,7 @@ def save_samples(
         image_dir=PROJECT_ROOT / "ISIC_2019_Training_Input",
         labels_csv=PROJECT_ROOT / "ISIC_2019_Training_GroundTruth.csv",
         metadata_csv=PROJECT_ROOT / "ISIC_2019_Training_Metadata.csv",
+        oversample_classes=cfg.oversample_classes,
     )
     loaders = source.get_dataloaders_baseline_experiment(train_cfg=cfg)
     output_dir = Path(output_dir).resolve()
@@ -117,7 +122,9 @@ def save_samples(
         writer = csv.DictWriter(handle, fieldnames=list(records[0]))
         writer.writeheader()
         writer.writerows(records)
-    print(f"Saved {len(records)} original images and three class overviews to {output_dir}")
+    logging.getLogger(__name__).info(
+        "Saved %d original images and three class overviews to %s", len(records), output_dir
+    )
     return output_dir
 
 

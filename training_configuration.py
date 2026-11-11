@@ -31,7 +31,7 @@ class TrainingCFG:
         allowed = {
             "optimizer", "optimizer_kwargs", "batch_size", "num_workers", "seed", "split_ratios", "loss_function",
             "loss_function_kwargs", "epochs", "scheduler_type", "scheduler_kwargs",
-            "early_stopping_patience", "early_stopping_tolerance",
+            "early_stopping_patience", "early_stopping_tolerance", "oversample_classes",
             "train_transforms", "val_transforms", "experiment_name", "run_name",
         }
         unknown = data.keys() - allowed
@@ -67,6 +67,10 @@ class TrainingCFG:
                  or math.isclose(sum(split_ratios), 1, rel_tol=0, abs_tol=1e-12))
         ), "split_ratios must be three positive fractions summing to at most 1."
         self.split_ratios: tuple[float, float, float] = tuple(split_ratios)
+        self.oversample_classes = data.get("oversample_classes", False)
+        assert type(self.oversample_classes) is bool, (
+            "oversample_classes must be a boolean."
+        )
         self.early_stopping_patience = self._positive_int(
             data, "early_stopping_patience", 7
         )

@@ -3,16 +3,18 @@
 from copy import deepcopy
 from dataclasses import dataclass, field
 import math
+import logging
 from time import perf_counter
 
 import torch
 from torch import nn
 from torch.utils.data import DataLoader
 from sklearn.metrics import confusion_matrix, f1_score, roc_auc_score
-from tqdm.auto import tqdm
 from training_configuration import TrainingCFG
 from mlflow_logger import MLflowLogger
 
+
+app_logger = logging.getLogger(__name__)
 
 @dataclass
 class EarlyStopper:
@@ -112,10 +114,9 @@ def _run_one_epoch(
     epoch_scores = []
     running_confusion = None
 
-    with torch.set_grad_enabled(training), tqdm(
-        dataloader, desc=description, unit="batch", dynamic_ncols=True
-    ) as progress:
-        for images, labels, *_ in progress:
+    app_logger.info("%s started: %s batches", description, len(dataloader))
+    with torch.set_grad_enabled(training):
+        for batch_index, (images, labels, *_) in enumerate(dataloader, start=1):
             images = images.to(device)
             labels = labels.to(device=device, dtype=torch.long).reshape(-1)
             if optimizer is not None:
@@ -146,10 +147,9 @@ def _run_one_epoch(
             running_macro_f1 = (
                 2 * running_confusion.diag().double() / denominator.clamp_min(1)
             ).mean().item()
-            progress.set_postfix(
-                loss=f"{total_loss / total:.4f}",
-                macro_f1=f"{running_macro_f1:.4f}",
-                refresh=False,
+            app_logger.info(
+                "%s | batch %d/%d | loss=%.4f | macro_f1=%.4f",
+                description, batch_index, len(dataloader), total_loss / total, running_macro_f1,
             )
 
     assert total > 0, "The dataloader must contain at least one sample."
@@ -272,7 +272,7 @@ def train(
                 scheduler.step(val_metrics["loss"])
             elif scheduler is not None:
                 scheduler.step()
-            print(
+            app_logger.info(
                 f"Epoch {epoch}/{train_cfg.epochs} | "
                 f"train loss: {train_metrics['loss']:.4f}, "
                 f"balanced accuracy: {train_metrics['balanced_accuracy']:.4f}, "
@@ -307,7 +307,7 @@ def train(
             logger.log_training_history(run_id, epoch_history, summary, cfg=train_cfg)
             if early_stopped:
                 logger.log_tags(run_id, {"stop_reason": "early_stopper_enabled"})
-                print(f"Early stopping after {epoch} epochs.")
+                app_logger.info(f"Early stopping after {epoch} epochs.")
                 break
 
         assert best_state is not None, "Training did not produce a finite validation loss."
@@ -315,7 +315,7 @@ def train(
         test_metrics = validate_one_epoch(
             model, test_dataloader, criterion, device, description="Test"
         )
-        print(
+        app_logger.info(
             f"Test loss: {test_metrics['loss']:.4f}, "
             f"balanced accuracy: {test_metrics['balanced_accuracy']:.4f}, "
             f"Macro F1: {test_metrics['macro_f1']:.4f}, Macro OvR AUC: {test_metrics['macro_auroc']:.4f}, "

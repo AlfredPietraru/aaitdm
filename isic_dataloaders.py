@@ -2,6 +2,7 @@
 
 import csv
 import math
+import random
 from collections import Counter, defaultdict
 from pathlib import Path
 
@@ -13,6 +14,7 @@ from torch.utils.data import DataLoader, Dataset
 from monai.data.utils import worker_init_fn
 
 from training_configuration import TrainingCFG
+from dataset_download import ensure_isic_dataset
 
 
 CLASS_NAMES = ("MEL", "NV", "BCC", "AK", "BKL", "DF", "VASC", "SCC")
@@ -59,6 +61,9 @@ class ISICDataLoaders:
     Groups are stratified by their majority class (ties use class order).
     Missing lesion IDs are treated as separate images; this cannot guarantee
     patient separation. UNK-positive rows are rejected for this eight-class task.
+    When oversample_classes is True, duplicate training entries for AK, DF,
+    VASC, and SCC once after splitting, and drop floor(60% of NV training
+    entries) using the configured seed. Validation and test remain unchanged.
     """
 
     def __init__(
@@ -66,12 +71,16 @@ class ISICDataLoaders:
         image_dir: str | Path = "ISIC_2019_Training_Input",
         labels_csv: str | Path = "ISIC_2019_Training_GroundTruth.csv",
         metadata_csv: str | Path = "ISIC_2019_Training_Metadata.csv",
+        oversample_classes: bool = False,
     ):
+        assert type(oversample_classes) is bool, "oversample_classes must be a boolean."
+        self.oversample_classes = oversample_classes
         image_dir = Path(image_dir)
         # Support both the extracted directory and the archive's nested layout.
         nested = image_dir / "ISIC_2019_Training_Input"
         if nested.is_dir():
             image_dir = nested
+        ensure_isic_dataset(image_dir, Path(labels_csv), Path(metadata_csv))
         with Path(metadata_csv).open(newline="", encoding="utf-8-sig") as handle:
             reader = csv.DictReader(handle)
             assert {'image', 'lesion_id'}.issubset(reader.fieldnames or []), (
@@ -132,7 +141,7 @@ class ISICDataLoaders:
         loader_kwargs = {
             "num_workers": num_workers,
             "persistent_workers": num_workers > 0,
-            "prefetch_factor": 2 if num_workers > 0 else None,
+            "prefetch_factor": 4 if num_workers > 0 else None,
             "pin_memory": torch.cuda.is_available(),
             "worker_init_fn": worker_init_fn,
         }
@@ -175,14 +184,20 @@ class ISICDataLoaders:
             )
 
         datasets = []
-        for selected, transform in zip(
+        for split_index, (selected, transform) in enumerate(zip(
             (train_groups, val_groups, test_groups),
             (train_cfg.train_transforms, train_cfg.val_transforms, train_cfg.val_transforms),
-        ):
+        )):
             indices = sorted(i for group in selected for i in group_indices[group])
             assert {samples[i][1] for i in indices} == set(range(len(CLASS_NAMES))), (
                 'Every split must contain all eight classes.'
             )
+            if split_index == 0 and self.oversample_classes:
+                nv_indices = [i for i in indices if samples[i][1] == CLASS_NAMES.index("NV")]
+                dropped = set(random.Random(seed).sample(nv_indices, len(nv_indices) * 3 // 5))
+                indices = [i for i in indices if i not in dropped]
+                oversampled_labels = {CLASS_NAMES.index(name) for name in ("AK", "DF", "VASC", "SCC")}
+                indices += [i for i in indices if samples[i][1] in oversampled_labels]
             datasets.append(ISICDataset(
                 [samples[i] for i in indices], [groups[i] for i in indices],
                 transform=transform,
