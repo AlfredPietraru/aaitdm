@@ -1,18 +1,23 @@
 """Dictionary-based training configuration and transform pipelines."""
 
+from collections.abc import Iterable
 from copy import deepcopy
-import math
+from hashlib import sha256
+import json
+import os
+import random
 from typing import Any
 
 import monai.transforms as monai_transforms
 from monai.transforms.compose import Compose
 from monai.transforms.transform import Transform
 from monai.transforms.utility.array import Lambda
+from monai.utils.misc import set_determinism
 import numpy as np
 import torch
 from torch import nn
 
-from losses import FocalLoss
+from .losses import FocalLoss
 
 
 class TrainingCFG:
@@ -29,20 +34,22 @@ class TrainingCFG:
 
     def __init__(self, data: dict[str, Any]) -> None:
         assert isinstance(data, dict), "TrainingCFG expects a dictionary."
-        self.data = deepcopy(data)
+        self.data = deepcopy({
+            key: value for key, value in data.items()
+            if key not in {"experiment_name", "run_name"}
+        })
         allowed = {
-            "optimizer", "optimizer_kwargs", "batch_size", "num_workers", "seed", "split_ratios", "loss_function",
+            "optimizer", "optimizer_kwargs", "batch_size", "num_workers", "seed", "loss_function",
             "loss_function_kwargs", "epochs", "scheduler_type", "scheduler_kwargs",
-            "early_stopping_patience", "early_stopping_tolerance", "oversample_classes",
+            "early_stopping_patience", "early_stopping_tolerance",
             "train_transforms", "val_transforms", "experiment_name", "run_name",
         }
         unknown = data.keys() - allowed
         assert not unknown, f"Unknown training settings: {sorted(unknown)}"
 
-        self.experiment_name = data.get("experiment_name", "isic2019-baseline")
-        self.run_name = data.get("run_name", "baseline")
-        assert isinstance(self.experiment_name, str) and self.experiment_name
-        assert isinstance(self.run_name, str) and self.run_name
+        self.experiment_name = "independent-train"
+        serialized = json.dumps(self.data, sort_keys=True, separators=(",", ":"), allow_nan=False)
+        self.run_name = sha256(serialized.encode("utf-8")).hexdigest()
 
         self.train_transforms = self._build_transforms(
             data.get("train_transforms", self._default_transforms())
@@ -59,19 +66,6 @@ class TrainingCFG:
         self.seed = data.get("seed", 42)
         assert type(self.seed) is int and 0 <= self.seed < 2**32, (
             "seed must be a 32-bit unsigned integer."
-        )
-        split_ratios = data.get("split_ratios", (0.7, 0.15, 0.15))
-        assert (
-            isinstance(split_ratios, (list, tuple))
-            and len(split_ratios) == 3
-            and all(type(x) in (int, float) and 0 < x < 1 for x in split_ratios)
-            and (sum(split_ratios) <= 1
-                 or math.isclose(sum(split_ratios), 1, rel_tol=0, abs_tol=1e-12))
-        ), "split_ratios must be three positive fractions summing to at most 1."
-        self.split_ratios: tuple[float, float, float] = tuple(split_ratios)
-        self.oversample_classes = data.get("oversample_classes", False)
-        assert type(self.oversample_classes) is bool, (
-            "oversample_classes must be a boolean."
         )
         self.early_stopping_patience = self._positive_int(
             data, "early_stopping_patience", 7
@@ -151,3 +145,24 @@ class TrainingCFG:
             f"Unknown or unsupported {namespace.__name__} component: {name!r}"
         )
         return component
+
+
+def set_seed(seed: int = 42, pipelines: Iterable[Compose] = ()) -> None:
+    """Seed all RNGs before creating models, loaders, or initializing CUDA.
+
+    Existing MONAI pipelines need their own random states reset explicitly.
+    Reproducibility requires the same hardware, software, and loader settings.
+    Operations without deterministic implementations fail rather than vary.
+    """
+    assert type(seed) is int and 0 <= seed < 2**32, "seed must be a 32-bit unsigned integer."
+    os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
+    set_determinism(seed=seed, use_deterministic_algorithms=True)
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+    torch.backends.cudnn.benchmark = False
+    torch.backends.cudnn.deterministic = True
+    for pipeline in pipelines:
+        pipeline.set_random_state(seed=seed)

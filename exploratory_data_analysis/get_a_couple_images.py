@@ -5,7 +5,6 @@ Run from any directory:
 """
 
 import argparse
-import logging
 import csv
 from pathlib import Path
 import random
@@ -20,10 +19,9 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from app_logging import configure_logging
 
-from isic_dataloaders import CLASS_NAMES, ISICDataLoaders
-from training_configuration import TrainingCFG
+from isic_dataloaders import DATA_DIR, CLASS_NAMES, ISICDataLoaders
+from net_training.training_configuration import TrainingCFG
 
 
 CLASS_DESCRIPTIONS = {
@@ -41,7 +39,10 @@ CLASS_DESCRIPTIONS = {
 def save_samples(
     samples_per_class: int = 3,
     output_dir: str | Path = Path(__file__).resolve().parent / "artifacts" / "samples",
-    config_path: str | Path = PROJECT_ROOT / "training_configuration.yaml",
+    config_path: str | Path = PROJECT_ROOT / "app-state" / "training_configuration.yaml",
+    *,
+    split_ratios: tuple[float, float, float],
+    oversample_classes: bool = False,
 ) -> Path:
     """Save samples from configured splits without augmentation or normalization.
 
@@ -49,7 +50,6 @@ def save_samples(
     using the configuration seed. Originals are copied unchanged; overview
     figures contain resized previews. manifest.csv records image provenance.
     """
-    configure_logging()
     assert type(samples_per_class) is int and samples_per_class > 0, (
         "samples_per_class must be a positive integer."
     )
@@ -57,12 +57,12 @@ def save_samples(
         data = yaml.safe_load(handle)
     cfg = TrainingCFG(data)
     source = ISICDataLoaders(
-        image_dir=PROJECT_ROOT / "ISIC_2019_Training_Input",
-        labels_csv=PROJECT_ROOT / "ISIC_2019_Training_GroundTruth.csv",
-        metadata_csv=PROJECT_ROOT / "ISIC_2019_Training_Metadata.csv",
-        oversample_classes=cfg.oversample_classes,
+        image_dir=DATA_DIR / "ISIC_2019_Training_Input",
+        labels_csv=DATA_DIR / "ISIC_2019_Training_GroundTruth.csv",
+        metadata_csv=DATA_DIR / "ISIC_2019_Training_Metadata.csv",
+        oversample_classes=oversample_classes,
     )
-    loaders = source.get_dataloaders_baseline_experiment(train_cfg=cfg)
+    loaders = source.get_dataloaders_baseline_experiment(train_cfg=cfg, split_ratios=split_ratios)
     output_dir = Path(output_dir).resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
     rng = random.Random(cfg.seed)
@@ -122,9 +122,6 @@ def save_samples(
         writer = csv.DictWriter(handle, fieldnames=list(records[0]))
         writer.writeheader()
         writer.writerows(records)
-    logging.getLogger(__name__).info(
-        "Saved %d original images and three class overviews to %s", len(records), output_dir
-    )
     return output_dir
 
 
@@ -133,6 +130,12 @@ if __name__ == "__main__":
     parser.add_argument("--samples-per-class", type=int, default=3)
     parser.add_argument("--output-dir", type=Path,
                         default=Path(__file__).resolve().parent / "artifacts" / "samples")
-    parser.add_argument("--config", type=Path, default=PROJECT_ROOT / "training_configuration.yaml")
+    parser.add_argument("--config", type=Path, default=PROJECT_ROOT / "app-state" / "training_configuration.yaml")
+    parser.add_argument("--split-ratios", type=float, nargs=3, required=True,
+                        metavar=("TRAIN", "VAL", "TEST"))
+    parser.add_argument("--oversample-classes", action="store_true",
+                        help="Resample training classes; validation and test stay unchanged.")
     args = parser.parse_args()
-    save_samples(args.samples_per_class, args.output_dir, args.config)
+    save_samples(args.samples_per_class, args.output_dir, args.config,
+                 split_ratios=tuple(args.split_ratios),
+                 oversample_classes=args.oversample_classes)

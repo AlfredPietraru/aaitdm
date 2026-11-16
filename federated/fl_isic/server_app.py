@@ -22,7 +22,7 @@ from flwr.serverapp import Grid, ServerApp
 from flwr.serverapp.strategy import FedAvg, FedProx, Result
 
 from fl_isic.task import OUTPUT_DIR, build_model
-from reproducibility import set_seed
+from net_training.training_configuration import set_seed
 
 app = ServerApp()
 
@@ -32,6 +32,7 @@ ClientHistory = dict[int, dict[int, dict[str, float]]]
 
 def recording_aggregator(
     history: ClientHistory,
+    phase: str = "metrics",
 ) -> Callable[[list[RecordDict], str], MetricRecord]:
     """Weighted average of client metrics that also stores each client's own values."""
 
@@ -47,7 +48,14 @@ def recording_aggregator(
             for key, value in metrics.items():
                 if key != weighting_key:
                     sums[key] += weight * float(value)
-        return MetricRecord({key: value / total for key, value in sums.items()})
+        aggregated = MetricRecord({key: value / total for key, value in sums.items()})
+        print(
+            f"Server | {phase} | loss={aggregated['loss']:.4f} | "
+            f"accuracy={aggregated['accuracy']:.4f} | "
+            f"macro_f1={aggregated['macro_f1']:.4f} (sample-weighted client average)",
+            flush=True,
+        )
+        return aggregated
 
     return aggregate
 
@@ -65,8 +73,8 @@ def main(grid: Grid, context: Context) -> None:
         "min_train_nodes": 1,
         "min_evaluate_nodes": 1,
         "min_available_nodes": num_nodes,
-        "train_metrics_aggr_fn": recording_aggregator(per_client["train"]),
-        "evaluate_metrics_aggr_fn": recording_aggregator(per_client["val"]),
+        "train_metrics_aggr_fn": recording_aggregator(per_client["train"], "training"),
+        "evaluate_metrics_aggr_fn": recording_aggregator(per_client["val"], "validation"),
     }
     strategy = FedProx(proximal_mu=mu, **common) if mu > 0 else FedAvg(**common)
     print(
@@ -119,12 +127,14 @@ def save_results(
     figure.savefig(out / "metrics.png", dpi=120)
     plt.close(figure)
 
-    figure, axes = plt.subplots(2, 2, figsize=(11, 7), sharex=True)
+    figure, axes = plt.subplots(3, 2, figsize=(11, 10), sharex=True)
     panels = (
         ("train", "loss", "Training loss (last local epoch)"),
         ("val", "loss", "Validation loss (received global model)"),
         ("train", "accuracy", "Training accuracy (last local epoch)"),
         ("val", "accuracy", "Validation accuracy (received global model)"),
+        ("train", "macro_f1", "Training macro-F1 (last local epoch)"),
+        ("val", "macro_f1", "Validation macro-F1 (received global model)"),
     )
     for axis, (phase, key, panel_title) in zip(axes.flat, panels):
         for client, rounds in sorted(per_client[phase].items()):
@@ -132,7 +142,7 @@ def save_results(
             axis.plot(ordered, [rounds[r][key] for r in ordered], marker="o",
                       label=f"hospital {client} (n={int(rounds[ordered[-1]]['num-examples'])})")
         axis.set(title=panel_title, xlabel="round")
-        if key == "accuracy":
+        if key in ("accuracy", "macro_f1"):
             axis.set_ylim(0, 1)
         axis.xaxis.set_major_locator(MaxNLocator(integer=True))
         axis.grid(alpha=0.3)

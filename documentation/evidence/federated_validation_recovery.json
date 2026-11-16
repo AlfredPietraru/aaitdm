@@ -1,0 +1,117 @@
+{
+  "method": "CPU inference of saved final global model; no retraining",
+  "configuration_hypothesis_source": "old_experiments/mlartifacts/1/0f5809266dbe4bf88ae98f4616cb60df/artifacts/training_history.txt",
+  "validation_transforms": [
+    {
+      "EnsureChannelFirst": {
+        "channel_dim": -1
+      }
+    },
+    {
+      "Resize": {
+        "spatial_size": [
+          512,
+          512
+        ]
+      }
+    },
+    {
+      "CenterSpatialCrop": {
+        "roi_size": [
+          224,
+          224
+        ]
+      }
+    },
+    {
+      "ScaleIntensityRange": {
+        "a_min": 0,
+        "a_max": 255,
+        "b_min": 0,
+        "b_max": 1
+      }
+    },
+    {
+      "NormalizeIntensity": {
+        "subtrahend": [
+          0.485,
+          0.456,
+          0.406
+        ],
+        "divisor": [
+          0.229,
+          0.224,
+          0.225
+        ],
+        "channel_wise": true
+      }
+    },
+    {
+      "ToTensor": {
+        "track_meta": false
+      }
+    }
+  ],
+  "observations": [
+    {
+      "client": 0,
+      "train_entries": 765,
+      "val_entries": 297,
+      "cross_entropy": 1.6674128293886041,
+      "focal_gamma_2": 1.3323615881901665,
+      "accuracy": 0.4377104377104377,
+      "macro_f1": 0.26343930533025983,
+      "saved_round_10": {
+        "loss": 1.3321597608251603,
+        "accuracy": 0.44107744107744107,
+        "macro_f1": 0.26508259368836296,
+        "num-examples": 297
+      }
+    },
+    {
+      "client": 1,
+      "train_entries": 1588,
+      "val_entries": 538,
+      "cross_entropy": 1.5053714635458935,
+      "focal_gamma_2": 1.1769297854935283,
+      "accuracy": 0.43308550185873607,
+      "macro_f1": 0.2917475360901951,
+      "saved_round_10": {
+        "loss": 1.1767917982264522,
+        "accuracy": 0.4312267657992565,
+        "macro_f1": 0.29054361586078353,
+        "num-examples": 538
+      }
+    },
+    {
+      "client": 2,
+      "train_entries": 2813,
+      "val_entries": 958,
+      "cross_entropy": 0.4752458446748548,
+      "focal_gamma_2": 0.25847571933157965,
+      "accuracy": 0.8663883089770354,
+      "macro_f1": 0.38541939342541987,
+      "saved_round_10": {
+        "loss": 0.2583162797486608,
+        "accuracy": 0.8653444676409185,
+        "macro_f1": 0.38463502912160047,
+        "num-examples": 958
+      }
+    },
+    {
+      "client": 3,
+      "train_entries": 2373,
+      "val_entries": 874,
+      "cross_entropy": 0.8937714869628027,
+      "focal_gamma_2": 0.6138064298614989,
+      "accuracy": 0.6864988558352403,
+      "macro_f1": 0.4478182670237368,
+      "saved_round_10": {
+        "loss": 0.613747795604732,
+        "accuracy": 0.6864988558352403,
+        "macro_f1": 0.4478182670237367,
+        "num-examples": 874
+      }
+    }
+  ]
+}

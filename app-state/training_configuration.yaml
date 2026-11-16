@@ -2,21 +2,19 @@
 # Use scheduler_type: null to disable scheduling.
 # Transform lists define complete pipelines, applied in order.
 # Minimum loss decrease from the last accepted best to reset patience (0 accepts any decrease).
-experiment_name: isic2019-baseline
-run_name: resnet18-sgd-center-crop
 epochs: 100
 batch_size: 128
 num_workers: 4
 seed: 42
-# Train, validation, test fractions; remaining data is unused.
-split_ratios: [0.6, 0.1, 0.1]
-# Training only: double AK/DF/VASC/SCC and remove 60% of NV entries.
-oversample_classes: False
-optimizer: SGD
+optimizer: AdamW
 optimizer_kwargs:
   lr: 0.0001
-  momentum: 0.9
   weight_decay: 0.001
+# optimizer: SGD
+# optimizer_kwargs:
+#   lr: 0.0001
+#   momentum: 0.9
+#   weight_decay: 0.001
 loss_function: FocalLoss
 loss_function_kwargs:
   gamma: 2.0

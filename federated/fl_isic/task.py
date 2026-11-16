@@ -1,13 +1,12 @@
 """Model, data partitioning, and local training shared by the ServerApp and ClientApp.
 
-The baseline modules (isic_dataloaders, neural_network, ...) live in the project
-root, which must be on PYTHONPATH; run_federated.sh sets it.
+The shared net_training package lives in the project root, which must be on
+PYTHONPATH; run_federated.sh sets it.
 """
 
 from collections import Counter, defaultdict
 from collections.abc import Mapping
 import json
-import logging
 import math
 import os
 from pathlib import Path
@@ -22,12 +21,9 @@ from torch.utils.data import DataLoader
 from torchvision.models import ResNet18_Weights, resnet18
 
 import isic_dataloaders
-from isic_dataloaders import CLASS_NAMES, ISICDataLoaders, ISICDataset
-from neural_network import train_one_epoch, validate_one_epoch
-from training_configuration import TrainingCFG
-
-# The baseline imports configure the root logger; without this every Flower line prints twice.
-logging.getLogger("flwr").propagate = False
+from isic_dataloaders import DATA_DIR, CLASS_NAMES, ISICDataLoaders, ISICDataset
+from net_training.neural_network import TrainingResults, train_one_epoch, validate_one_epoch
+from net_training.training_configuration import TrainingCFG
 
 PROJECT_DIR = Path(isic_dataloaders.__file__).resolve().parent
 OUTPUT_DIR = PROJECT_DIR / "federated" / "outputs"
@@ -49,13 +45,12 @@ def build_model(pretrained: bool = False) -> nn.Module:
 
 def load_training_cfg(run_config: Mapping[str, Any]) -> TrainingCFG:
     """Baseline YAML settings with the federated run configuration applied on top."""
-    with (PROJECT_DIR / "training_configuration.yaml").open(encoding="utf-8") as handle:
+    with (PROJECT_DIR / "app-state" / "training_configuration.yaml").open(encoding="utf-8") as handle:
         data: dict[str, Any] = yaml.safe_load(handle)
     data.update(
         batch_size=int(run_config["batch-size"]),
         num_workers=int(run_config["num-workers"]),
         seed=int(run_config["seed"]),
-        split_ratios=[float(run_config[f"{split}-fraction"]) for split in SPLITS],
         optimizer_kwargs={
             **data.get("optimizer_kwargs", {}),
             "lr": float(run_config["learning-rate"]),
@@ -64,21 +59,21 @@ def load_training_cfg(run_config: Mapping[str, Any]) -> TrainingCFG:
     return TrainingCFG(data)
 
 
-def load_split(cfg: TrainingCFG) -> dict[str, ISICDataset]:
+def load_split(cfg: TrainingCFG, split_ratios: tuple[float, float, float]) -> dict[str, ISICDataset]:
     """Return the baseline lesion-separated split, cached as JSON.
 
     Indexing ISIC checks every image file, which takes about a minute on a
     Windows drive mounted in WSL. Clients that start together may each build
     the cache once; the atomic replace keeps the file consistent.
     """
-    ratios = "-".join(f"{ratio:g}" for ratio in cfg.split_ratios)
-    cache = OUTPUT_DIR / "cache" / f"split-seed{cfg.seed}-{ratios}.json"
+    ratios = "-".join(f"{ratio:g}" for ratio in split_ratios)
+    cache = OUTPUT_DIR / "cache" / f"split-data-seed{cfg.seed}-{ratios}.json"
     if not cache.is_file():
         datasets = ISICDataLoaders(
-            image_dir=PROJECT_DIR / "ISIC_2019_Training_Input",
-            labels_csv=PROJECT_DIR / "ISIC_2019_Training_GroundTruth.csv",
-            metadata_csv=PROJECT_DIR / "ISIC_2019_Training_Metadata.csv",
-        ).get_datasets_baseline_experiment(train_cfg=cfg)
+            image_dir=DATA_DIR / "ISIC_2019_Training_Input",
+            labels_csv=DATA_DIR / "ISIC_2019_Training_GroundTruth.csv",
+            metadata_csv=DATA_DIR / "ISIC_2019_Training_Metadata.csv",
+        ).get_datasets_baseline_experiment(train_cfg=cfg, split_ratios=split_ratios)
         payload = {
             split: {
                 "samples": [[str(path), label] for path, label in dataset.samples],
@@ -159,7 +154,8 @@ def client_datasets(
     cfg: TrainingCFG, run_config: Mapping[str, Any], partition_id: int, num_partitions: int,
 ) -> tuple[ISICDataset, ISICDataset]:
     """Return this client's local training and validation data."""
-    datasets = load_split(cfg)
+    split_ratios = tuple(float(run_config[f"{split}-fraction"]) for split in SPLITS)
+    datasets = load_split(cfg, split_ratios)
     train, val = partition(
         datasets, num_partitions, str(run_config["partitioning"]),
         float(run_config["dirichlet-alpha"]), cfg.seed,
@@ -212,26 +208,29 @@ class ProximalLoss(nn.Module):
 
 def local_train(
     model: nn.Module, loader: DataLoader, cfg: TrainingCFG, epochs: int, mu: float, label: str,
-) -> dict[str, Any]:
-    """Run E local epochs from the received global weights; return the last epoch's metrics."""
+) -> TrainingResults:
+    """Run E local epochs from the received global weights and retain their history."""
     device = get_device()
     model.to(device)
     criterion = ProximalLoss(cfg.loss_function, model, mu).to(device)
     optimizer = cfg.optimizer(model.parameters(), **cfg.optimizer_kwargs)
-    metrics: dict[str, Any] = {}
+    if epochs < 1:
+        raise ValueError("Local training requires at least one epoch.")
+    metrics = TrainingResults(split="train")
     for epoch in range(1, epochs + 1):
-        metrics = train_one_epoch(
+        epoch_results = train_one_epoch(
             model, loader, optimizer, criterion, device,
-            description=f"{label} - local epoch {epoch}/{epochs}",
         )
+        metrics.extend(epoch_results)
     return metrics
 
 
-def evaluate(model: nn.Module, loader: DataLoader, cfg: TrainingCFG, label: str) -> dict[str, Any]:
+def evaluate(model: nn.Module, loader: DataLoader, cfg: TrainingCFG, label: str) -> TrainingResults:
     device = get_device()
     model.to(device)
-    return validate_one_epoch(model, loader, cfg.loss_function.to(device), device, description=label)
+    return validate_one_epoch(model, loader, cfg.loss_function.to(device), device)
 
 
-def scalar_metrics(metrics: Mapping[str, Any], keys: tuple[str, ...]) -> dict[str, float]:
-    return {key: float(metrics[key]) for key in keys if math.isfinite(metrics[key])}
+def scalar_metrics(metrics: TrainingResults, keys: tuple[str, ...]) -> dict[str, float]:
+    scalars = metrics.scalar_metrics()
+    return {key: float(scalars[key]) for key in keys if math.isfinite(scalars[key])}

@@ -17,7 +17,7 @@ from fl_isic.task import (
     make_loader,
     scalar_metrics,
 )
-from reproducibility import set_seed
+from net_training.training_configuration import set_seed
 
 app = ClientApp()
 

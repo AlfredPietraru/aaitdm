@@ -13,3 +13,8 @@ archive.zip
 exploratory_data_analysis/artifacts
 aaitdm_archive.zip
 app.log
+old_experiments
+
+/app-state/mlflow.db*
+
+/app-state/mlartifacts/

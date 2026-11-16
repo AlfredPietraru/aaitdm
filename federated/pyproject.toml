@@ -36,7 +36,7 @@ proximal-mu = 0.0
 # "iid" or "dirichlet" (label skew; smaller alpha = more non-IID).
 partitioning = "dirichlet"
 dirichlet-alpha = 0.5
-# Same lesion-group split as the centralized baseline in training_configuration.yaml.
+# Same lesion-group split as the centralized baseline in app-state/training_configuration.yaml.
 # Clients get shares of train and val; the test split is held back and never used here.
 train-fraction = 0.3
 val-fraction = 0.1
