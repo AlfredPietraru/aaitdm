@@ -18,3 +18,5 @@ old_experiments
 /app-state/mlflow.db*
 
 /app-state/mlartifacts/
+
+/app-state/mlflow-server.log

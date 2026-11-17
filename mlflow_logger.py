@@ -13,7 +13,8 @@ from mlflow.tracking import MlflowClient
 import yaml
 
 if TYPE_CHECKING:
-    from .neural_network import TrainingResults
+    from net_training.neural_network import TrainingResults
+    from federated.fl_isic.federated_training_results import FederatedTrainingResults
 
 
 class MLflowLogger:
@@ -34,7 +35,7 @@ class MLflowLogger:
         self.log_model(experiment_id, run_id, results)
         self.log_status(experiment_id, run_id, results)
 
-    def log_configuration(self, run_id: str, results: "TrainingResults") -> None:
+    def log_configuration(self, experiment_id: str, run_id: str, results: "TrainingResults") -> None:
         """Publish the configuration carried by the results."""
         cfg = results.configuration
         if cfg is None:
@@ -63,7 +64,7 @@ class MLflowLogger:
             "val_transforms": cfg.data.get("val_transforms", cfg._default_transforms()),
         }, sort_keys=False), "transforms.txt")
 
-    def log_epoch_metrics(self, run_id: str, results: "TrainingResults") -> None:
+    def log_epoch_metrics(self, experiment_id: str, run_id: str, results: "TrainingResults") -> None:
         """Publish every epoch, deriving step numbers from its position in history.
 
         Existing server metric history prevents duplicate points on repeated calls.
@@ -173,7 +174,7 @@ class MLflowLogger:
         MlflowClient().log_text(run_id, json.dumps(safe, indent=2, allow_nan=False) + "\n",
                                "training_history.txt")
 
-    def log_model(self, run_id: str, results: "TrainingResults") -> None:
+    def log_model(self, experiment_id: str, run_id: str, results: "TrainingResults") -> None:
         """Upload the successful run's final model when supplied."""
         if results.status.value != "succeeded" or results.model is None:
             return
@@ -184,7 +185,7 @@ class MLflowLogger:
             mlflow.pytorch.save_model(results.model, path=str(model_path), serialization_format="pickle")
             client.log_artifacts(run_id, str(model_path), artifact_path="model")
 
-    def log_status(self, run_id: str, results: "TrainingResults") -> None:
+    def log_status(self, experiment_id: str, run_id: str, results: "TrainingResults") -> None:
         """Map the training outcome to MLflow status and descriptive tags."""
         client = MlflowClient()
         state = results.status.value
@@ -196,6 +197,91 @@ class MLflowLogger:
             reason = "early_stopper_enabled"
         client.set_tag(run_id, "training_status", state)
         client.set_tag(run_id, "stop_reason", reason)
+        if results.failure_reason is not None:
+            client.set_tag(run_id, "error_message", results.failure_reason[:1000])
+        status = {"succeeded": "FINISHED", "failed": "FAILED", "interrupted": "KILLED"}.get(state)
+        if status is not None:
+            client.set_terminated(run_id, status=status)
+
+    def log_federated(
+        self, experiment_id: str, run_id: str, results: "FederatedTrainingResults",
+    ) -> None:
+        """Publish the current federated snapshot without keeping any logger state."""
+        client = MlflowClient()
+        if str(client.get_run(run_id).info.experiment_id) != str(experiment_id):
+            raise ValueError("The run does not belong to the supplied experiment.")
+        for key, value in results.configuration.to_dict().items():
+            client.log_param(run_id, key, value)
+        self.log_federated_metrics(experiment_id, run_id, results)
+        self.log_federated_artifacts(experiment_id, run_id, results)
+        self.log_federated_status(experiment_id, run_id, results)
+
+    def log_federated_metrics(
+        self, experiment_id: str, run_id: str, results: "FederatedTrainingResults",
+    ) -> None:
+        """Log aggregate and per-client values using server rounds as MLflow steps."""
+        client = MlflowClient()
+        existing: dict[str, dict[int, float]] = {}
+        metrics = []
+        timestamp = int(time.time() * 1000)
+        histories = [
+            ("train", results.train_metrics_clientapp),
+            ("val", results.evaluate_metrics_clientapp),
+            ("server", results.evaluate_metrics_serverapp),
+        ]
+        histories.extend(
+            (f"clients.{client_id}.{phase}", history)
+            for phase, clients in results.per_client.items() for client_id, history in clients.items()
+        )
+        for prefix, history in histories:
+            for server_round, values in sorted(history.items()):
+                for name, value in values.items():
+                    if not isinstance(value, (int, float)) or not math.isfinite(value):
+                        continue
+                    key = f"{prefix}.{name}"
+                    if key not in existing:
+                        existing[key] = {point.step: point.value
+                                         for point in client.get_metric_history(run_id, key)}
+                    if existing[key].get(server_round) != value:
+                        metrics.append(Metric(key, float(value), timestamp, server_round))
+        for start in range(0, len(metrics), 1000):
+            client.log_batch(run_id, metrics=metrics[start:start + 1000], synchronous=True)
+
+    def log_federated_artifacts(
+        self, experiment_id: str, run_id: str, results: "FederatedTrainingResults",
+    ) -> None:
+        """Replace live plots/history at stable paths and upload available weights."""
+        from federated.fl_isic.federated_plotter import FederatedPlotter
+        import torch
+
+        client = MlflowClient()
+        report = {"experiment_id": experiment_id, "run_id": run_id, **results.to_dict()}
+        safe = json.loads(json.dumps(report, allow_nan=True), parse_constant=lambda _: None)
+        client.log_text(run_id, json.dumps(safe, indent=2, allow_nan=False) + "\n",
+                        "federated/results.json")
+        client.log_dict(run_id, results.configuration.to_dict(), "federated/configuration.json")
+        figures = FederatedPlotter(results).plot_all()
+        try:
+            for name, figure in figures.items():
+                client.log_figure(run_id, figure, f"federated/{name}")
+        finally:
+            for figure in figures.values():
+                figure.clear()
+        if results.final_state_dict is not None:
+            with TemporaryDirectory() as directory:
+                path = Path(directory) / "global_model.pt"
+                torch.save(results.final_state_dict, path)
+                client.log_artifact(run_id, str(path), artifact_path="federated")
+
+    def log_federated_status(
+        self, experiment_id: str, run_id: str, results: "FederatedTrainingResults",
+    ) -> None:
+        """Keep the run open while training and terminate it only at the end."""
+        client = MlflowClient()
+        state = results.status.value
+        client.set_tag(run_id, "training_status", state)
+        client.set_tag(run_id, "strategy", results.strategy)
+        client.set_tag(run_id, "rounds_completed", str(results.rounds_completed))
         if results.failure_reason is not None:
             client.set_tag(run_id, "error_message", results.failure_reason[:1000])
         status = {"succeeded": "FINISHED", "failed": "FAILED", "interrupted": "KILLED"}.get(state)

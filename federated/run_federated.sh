@@ -2,20 +2,37 @@
 # Start a local Flower deployment: one SuperLink (server), NUM_CLIENTS SuperNodes
 # (hospitals), then submit the app and stream the server log until it finishes.
 #
-#   ./run_federated.sh                                  # defaults from pyproject.toml
-#   NUM_CLIENTS=4 ./run_federated.sh num-server-rounds=10 proximal-mu=0.01
+#   ./run_federated.sh                                  # defaults from app-state/federated_configuration.yaml
+#   NUM_CLIENTS=4 ./run_federated.sh
 #
 # Per-process logs are written to outputs/logs/.
 set -euo pipefail
 
+if (( $# > 0 )); then
+    echo "This script takes no arguments. Edit app-state/federated_configuration.yaml; use NUM_CLIENTS to override the hospital count." >&2
+    exit 2
+fi
+
 APP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$APP_DIR")"
-NUM_CLIENTS="${NUM_CLIENTS:-3}"
 SUPERLINK_PORT="${SUPERLINK_PORT:-8000}"
 LOG_DIR="$APP_DIR/outputs/logs"
 
 export PATH="${VENV_BIN:-$PROJECT_DIR/.venv/bin}:$PATH"
 export PYTHONPATH="$PROJECT_DIR${PYTHONPATH:+:$PYTHONPATH}"
+FEDERATED_CONFIG="$PROJECT_DIR/app-state/federated_configuration.yaml"
+# Read settings before starting any processes; a malformed YAML must fail here.
+config_text="$(python3 "$APP_DIR/fl_isic/configuration.py" "$FEDERATED_CONFIG")"
+mapfile -t config_overrides <<< "$config_text"
+for setting in "${config_overrides[@]}"; do
+    if [[ "$setting" == min-nodes=* ]]; then
+        NUM_CLIENTS="${NUM_CLIENTS:-${setting#min-nodes=}}"
+    fi
+done
+if [[ ! "$NUM_CLIENTS" =~ ^[1-9][0-9]*$ ]]; then
+    echo "NUM_CLIENTS must be a positive integer" >&2
+    exit 1
+fi
 # Must stay outside APP_DIR: flwr run scans APP_DIR when packaging the app.
 export FLWR_HOME="${FLWR_HOME:-$HOME/.flwr-aitdm}"
 mkdir -p "$LOG_DIR" "$FLWR_HOME"
@@ -30,11 +47,22 @@ insecure = true
 EOF
 
 pids=()
+RUN_APP_DIR=""
 cleanup() {
     kill "${pids[@]}" 2>/dev/null || true
     wait 2>/dev/null || true
+    if [[ -n "$RUN_APP_DIR" ]]; then
+        rm -rf -- "$RUN_APP_DIR"
+    fi
 }
 trap cleanup EXIT INT TERM
+
+# Declare all YAML settings in a generated manifest before Flower packages it.
+# Staging outside APP_DIR also excludes output logs and other mutable files.
+RUN_APP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/fl-isic.XXXXXX")"
+echo "Generating Flower app configuration from $FEDERATED_CONFIG"
+python3 "$APP_DIR/fl_isic/configuration.py" "$FEDERATED_CONFIG" \
+    --prepare-app "$APP_DIR" --output-dir "$RUN_APP_DIR" --num-clients "$NUM_CLIENTS"
 
 wait_for_port() {
     for _ in $(seq 60); do
@@ -63,8 +91,4 @@ for ((i = 0; i < NUM_CLIENTS; i++)); do
     pids+=($!)
 done
 
-overrides=(--run-config "min-nodes=$NUM_CLIENTS")
-for override in "$@"; do
-    overrides+=(--run-config "$override")
-done
-flwr run "$APP_DIR" local-deployment --stream "${overrides[@]}"
+flwr run "$RUN_APP_DIR" local-deployment --stream

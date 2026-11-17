@@ -8,7 +8,7 @@ Shared code for centralized and federated ISIC network training:
 - `losses.py`: focal loss.
 - `../isic_dataloaders.py`: datasets, splits, loaders, and `ensure_isic_dataset`.
 - `../main.py`: dataset preparation, `train_baseline_pipeline()`, and training entry point.
-- `mlflow_logger.py`: experiment tracking.
+- `../mlflow_logger.py`: shared experiment tracking outside the training package.
 
 From the repository root, activate the environment created by the startup script
 and run the root entry point to check the dataset before starting training:
@@ -69,7 +69,7 @@ The centralized split is fixed to 80% training, 10% validation, and 10% test
 in `main.py`'s `train_baseline_pipeline()`. Split ratios are supplied to data
 loaders separately from `TrainingCFG` and are excluded from the configuration
 hash. Analysis scripts require `--split-ratios TRAIN VAL TEST`; federated runs
-use their existing fraction settings in `federated/pyproject.toml`.
+use their own fraction settings in `app-state/federated_configuration.yaml`.
 
 Class resampling is controlled by `ISICDataLoaders(oversample_classes=...)`,
 separately from training configuration. The baseline disables it in `main.py`;

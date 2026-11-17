@@ -11,7 +11,7 @@ from torch import nn
 from torch.utils.data import DataLoader
 from sklearn.metrics import confusion_matrix, f1_score, roc_auc_score
 from .training_configuration import TrainingCFG
-from .mlflow_logger import MLflowLogger
+from mlflow_logger import MLflowLogger
 
 
 @dataclass

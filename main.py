@@ -1,4 +1,4 @@
-"""Prepare the ISIC dataset and run centralized network training."""
+"""Launch federated training, resume an experiment, or run a centralized baseline."""
 
 from pathlib import Path
 import os
@@ -13,7 +13,7 @@ from torchvision.models import ResNet18_Weights, resnet18
 from isic_dataloaders import CLASS_NAMES, ISICDataLoaders, ensure_isic_dataset
 
 from net_training.neural_network import TrainingResults, train
-from net_training.mlflow_logger import MLflowLogger
+from mlflow_logger import MLflowLogger
 from net_training.training_configuration import TrainingCFG, set_seed
 
 
@@ -51,13 +51,40 @@ def train_baseline_pipeline() -> tuple[nn.Module, TrainingResults]:
 
 
 
-def main() -> None:
+def centralized_main() -> None:
     """Skip downloading complete datasets, then run centralized training."""
     try:
         ensure_isic_dataset()
         train_baseline_pipeline()
     except KeyboardInterrupt:
         raise SystemExit(130) from None
+
+
+def main() -> None:
+    """Start a new federation, or explicitly resume an MLflow experiment."""
+    import argparse
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("experiment_id", nargs="?", help="MLflow experiment to resume")
+    parser.add_argument("--centralized", action="store_true", help="Run the original baseline")
+    args = parser.parse_args()
+    if args.centralized and args.experiment_id:
+        parser.error("experiment_id is only supported for federated training")
+    from mlflow_server import tracking_server
+    with tracking_server(Path(__file__).resolve().parent / "app-state"):
+        launch_training(args, parser)
+
+
+def launch_training(args, parser) -> None:
+    import subprocess
+    import sys
+    if args.centralized:
+        centralized_main()
+        return
+    environment = os.environ.copy()
+    environment["RESUME_EXPERIMENT_ID"] = args.experiment_id or ""
+    environment["VENV_BIN"] = str(Path(sys.executable).parent)
+    script = Path(__file__).resolve().parent / "federated" / "run_federated.sh"
+    raise SystemExit(subprocess.call(["bash", str(script)], env=environment))
 
 
 if __name__ == "__main__":

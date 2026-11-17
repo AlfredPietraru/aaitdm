@@ -8,7 +8,7 @@ import torch
 from torch import nn
 from torch.utils.data import DataLoader, TensorDataset
 
-from net_training.mlflow_logger import MLflowLogger
+from mlflow_logger import MLflowLogger
 from net_training.neural_network import TrainingResults, train, validate_one_epoch
 from net_training.training_configuration import TrainingCFG
 
@@ -43,7 +43,7 @@ class TrainingResultsTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             _ = results.epoch
 
-    @patch("net_training.mlflow_logger.MlflowClient")
+    @patch("mlflow_logger.MlflowClient")
     def test_logger_infers_epochs_without_duplicate_metric_points(self, factory):
         client = factory.return_value
         client.create_run.return_value.info.run_id = "test"
@@ -64,7 +64,7 @@ class TrainingResultsTests(unittest.TestCase):
         self.assertIsNone(logger._run_id)
 
     @patch.object(MLflowLogger, "log_model")
-    @patch("net_training.mlflow_logger.MlflowClient")
+    @patch("mlflow_logger.MlflowClient")
     def test_training_exports_every_epoch_and_test_results(self, factory, log_model):
         client = factory.return_value
         client.create_run.return_value.info.run_id = "test"

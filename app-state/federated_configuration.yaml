@@ -1,0 +1,23 @@
+# Federated coordination and client settings, independent of centralized training.
+num-server-rounds: 10
+local-epochs: 2
+fraction-train: 1.0
+fraction-evaluate: 1.0
+min-train-nodes: 1
+min-evaluate-nodes: 1
+# Default hospital count; NUM_CLIENTS overrides this in the launcher.
+min-nodes: 3
+# 0.0 selects FedAvg; positive values select FedProx.
+proximal-mu: 0.0
+# "iid" or "dirichlet"; smaller alpha produces more label skew.
+partitioning: dirichlet
+dirichlet-alpha: 0.5
+# Fractions of lesion groups. Unassigned groups remain unused.
+# Hospitals receive train/validation shares; the test split is held back.
+train-fraction: 0.3
+val-fraction: 0.1
+test-fraction: 0.1
+batch-size: 32
+learning-rate: 0.0001
+num-workers: 2
+seed: 42

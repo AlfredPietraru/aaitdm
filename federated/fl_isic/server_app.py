@@ -8,47 +8,55 @@ clients on their own validation data; the server just averages those metrics.
 
 from collections import defaultdict
 from collections.abc import Callable
-from datetime import datetime
 import json
+import os
 
-import matplotlib
-
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
-from matplotlib.ticker import MaxNLocator
-import torch
+import mlflow
+from mlflow_logger import MLflowLogger
 from flwr.app import ArrayRecord, Context, MetricRecord, RecordDict
 from flwr.serverapp import Grid, ServerApp
-from flwr.serverapp.strategy import FedAvg, FedProx, Result
+from flwr.serverapp.strategy import FedAvg, FedProx
 
-from fl_isic.task import OUTPUT_DIR, build_model
+from fl_isic.federated_cfg import FederatedCFG
+from fl_isic.federated_training_results import (
+    FederatedTrainingResults, FederatedTrainingStatus,
+)
+from fl_isic.task import build_model
 from net_training.training_configuration import set_seed
 
 app = ServerApp()
 
-# client id -> round -> metrics
-ClientHistory = dict[int, dict[int, dict[str, float]]]
-
 
 def recording_aggregator(
-    history: ClientHistory,
-    phase: str = "metrics",
+    results: FederatedTrainingResults,
+    phase: str,
+    on_update: Callable[[FederatedTrainingResults], None] | None = None,
 ) -> Callable[[list[RecordDict], str], MetricRecord]:
     """Weighted average of client metrics that also stores each client's own values."""
 
     def aggregate(records: list[RecordDict], weighting_key: str) -> MetricRecord:
         total = 0.0
         sums: dict[str, float] = defaultdict(float)
+        server_round = None
         for record in records:
             metrics = dict(next(iter(record.metric_records.values())))
             client = int(metrics.pop("partition-id"))
-            history.setdefault(client, {})[int(metrics.pop("server-round"))] = metrics
+            round_number = int(metrics.pop("server-round"))
+            if server_round is not None and round_number != server_round:
+                raise ValueError("Cannot aggregate replies from different rounds.")
+            server_round = round_number
+            results.add_client_metrics(phase, client, server_round, metrics)
             weight = float(metrics[weighting_key])
             total += weight
             for key, value in metrics.items():
                 if key != weighting_key:
                     sums[key] += weight * float(value)
+        if total <= 0 or server_round is None:
+            raise ValueError("Cannot aggregate replies without positive sample counts.")
         aggregated = MetricRecord({key: value / total for key, value in sums.items()})
+        results.add_round_metrics(phase, server_round, dict(aggregated))
+        if on_update is not None:
+            on_update(results)
         print(
             f"Server | {phase} | loss={aggregated['loss']:.4f} | "
             f"accuracy={aggregated['accuracy']:.4f} | "
@@ -62,93 +70,76 @@ def recording_aggregator(
 
 @app.main()
 def main(grid: Grid, context: Context) -> None:
-    run_config = context.run_config
-    set_seed(int(run_config["seed"]))
-    num_nodes = int(run_config["min-nodes"])
-    mu = float(run_config["proximal-mu"])
-    per_client: dict[str, ClientHistory] = {"train": {}, "val": {}}
-    common = {
-        "fraction_train": float(run_config["fraction-train"]),
-        "fraction_evaluate": 1.0,
-        "min_train_nodes": 1,
-        "min_evaluate_nodes": 1,
-        "min_available_nodes": num_nodes,
-        "train_metrics_aggr_fn": recording_aggregator(per_client["train"], "training"),
-        "evaluate_metrics_aggr_fn": recording_aggregator(per_client["val"], "validation"),
-    }
-    strategy = FedProx(proximal_mu=mu, **common) if mu > 0 else FedAvg(**common)
-    print(
-        f"Server | {type(strategy).__name__} for {run_config['num-server-rounds']} rounds, "
-        f"waiting for {num_nodes} clients"
-    )
-    result = strategy.start(
-        grid=grid,
-        initial_arrays=ArrayRecord(build_model(pretrained=True).state_dict()),
-        num_rounds=int(run_config["num-server-rounds"]),
-    )
-    save_results(result, per_client, dict(run_config), type(strategy).__name__)
+    cfg = FederatedCFG(context.run_config)
+    results = FederatedTrainingResults(configuration=cfg)
+    mlflow.set_tracking_uri(os.environ.get("MLFLOW_TRACKING_URI", "http://localhost:5000"))
+    from fl_isic.tracking import FederatedTracking
+    tracking_config = cfg.to_dict()
+    tracking_config.pop("resume-experiment-id")
+    tracking = FederatedTracking(tracking_config, cfg.resume_experiment_id)
+    experiment_id, run_id = tracking.experiment_id, tracking.run_id
+    results.configuration.resume_experiment_id = ""
+    checkpoint = tracking.restore()
+    completed_round = checkpoint["round"] if checkpoint else 0
+    print(f"MLflow experiment: {experiment_id}; completed round: {completed_round}", flush=True)
+    if checkpoint and checkpoint.get("results"):
+        saved = checkpoint["results"]
+        for name in ("train_metrics_clientapp", "evaluate_metrics_clientapp", "evaluate_metrics_serverapp"):
+            setattr(results, name, {int(k): v for k, v in saved[name].items()})
+        results.per_client = {phase: {int(client): {int(r): values for r, values in history.items()}
+            for client, history in clients.items()} for phase, clients in saved["per_client"].items()}
+    logger = MLflowLogger()
 
+    def publish(updated_results: FederatedTrainingResults) -> None:
+        logger.log_federated(experiment_id, run_id, updated_results)
 
-def save_results(
-    result: Result, per_client: dict[str, ClientHistory], run_config: dict, strategy: str,
-) -> None:
-    """Write per-round metrics, plots, and the final global weights."""
-    out = OUTPUT_DIR / datetime.now().strftime("%Y%m%d-%H%M%S")
-    out.mkdir(parents=True)
-    history = {
-        name: {int(r): dict(record) for r, record in getattr(result, name).items()}
-        for name in ("train_metrics_clientapp", "evaluate_metrics_clientapp")
-    }
-    (out / "results.json").write_text(
-        json.dumps(
-            {"strategy": strategy, "run_config": run_config, **history, "per_client": per_client},
-            indent=2,
-        ),
-        encoding="utf-8",
-    )
-    torch.save(result.arrays.to_torch_state_dict(), out / "global_model.pt")
-    title = f"{strategy} on ISIC 2019, {run_config['partitioning']} partitioning"
-
-    figure, (scores, losses) = plt.subplots(1, 2, figsize=(11, 4))
-    for name, phase in (("evaluate_metrics_clientapp", "validation"), ("train_metrics_clientapp", "training")):
-        rounds = sorted(history[name])
-        for key in ("accuracy", "macro_f1"):
-            scores.plot(rounds, [history[name][r][key] for r in rounds], marker="o",
-                        linestyle="-" if phase == "validation" else "--", label=f"client {phase} {key}")
-        losses.plot(rounds, [history[name][r]["loss"] for r in rounds], marker="o", label=f"client {phase} loss")
-    scores.set(title="Global model, scored by the clients", xlabel="round", ylim=(0, 1))
-    losses.set(title="Loss", xlabel="round")
-    for axis in (scores, losses):
-        axis.xaxis.set_major_locator(MaxNLocator(integer=True))
-        axis.grid(alpha=0.3)
-        axis.legend()
-    figure.suptitle(f"{title} (client metrics weighted by n_k)")
-    figure.tight_layout()
-    figure.savefig(out / "metrics.png", dpi=120)
-    plt.close(figure)
-
-    figure, axes = plt.subplots(3, 2, figsize=(11, 10), sharex=True)
-    panels = (
-        ("train", "loss", "Training loss (last local epoch)"),
-        ("val", "loss", "Validation loss (received global model)"),
-        ("train", "accuracy", "Training accuracy (last local epoch)"),
-        ("val", "accuracy", "Validation accuracy (received global model)"),
-        ("train", "macro_f1", "Training macro-F1 (last local epoch)"),
-        ("val", "macro_f1", "Validation macro-F1 (received global model)"),
-    )
-    for axis, (phase, key, panel_title) in zip(axes.flat, panels):
-        for client, rounds in sorted(per_client[phase].items()):
-            ordered = sorted(rounds)
-            axis.plot(ordered, [rounds[r][key] for r in ordered], marker="o",
-                      label=f"hospital {client} (n={int(rounds[ordered[-1]]['num-examples'])})")
-        axis.set(title=panel_title, xlabel="round")
-        if key in ("accuracy", "macro_f1"):
-            axis.set_ylim(0, 1)
-        axis.xaxis.set_major_locator(MaxNLocator(integer=True))
-        axis.grid(alpha=0.3)
-        axis.legend(fontsize=8)
-    figure.suptitle(f"{title}: per hospital")
-    figure.tight_layout()
-    figure.savefig(out / "per_client.png", dpi=120)
-    plt.close(figure)
-    print(f"Server | results saved to {out}")
+    try:
+        publish(results)
+        set_seed(cfg.seed)
+        common = cfg.strategy_kwargs(
+            train_metrics_aggr_fn=recording_aggregator(results, "train", publish),
+            evaluate_metrics_aggr_fn=recording_aggregator(results, "val", publish),
+        )
+        strategy = (
+            FedProx(proximal_mu=cfg.proximal_mu, **common)
+            if cfg.proximal_mu > 0 else FedAvg(**common)
+        )
+        print(
+            f"Server | {results.strategy} for {cfg.num_server_rounds} rounds, "
+            f"waiting for {cfg.min_nodes} clients"
+        )
+        from flwr.app import ConfigRecord
+        arrays = ArrayRecord(checkpoint["state_dict"]) if checkpoint else ArrayRecord(build_model(pretrained=True).state_dict())
+        if checkpoint is None:
+            tracking.checkpoint(0, arrays, results)
+        for round_number in range(completed_round + 1, completed_round + cfg.num_server_rounds + 1):
+            # One strategy round per call makes the returned aggregate a commit boundary.
+            offset = round_number - 1
+            strategy.train_metrics_aggr_fn = recording_aggregator(results, "train", publish)
+            strategy.evaluate_metrics_aggr_fn = recording_aggregator(results, "val", publish)
+            config = ConfigRecord({"round-offset": offset, "mlflow-experiment-id": experiment_id,
+                "mlflow-client-runs": json.dumps(tracking.manifest["clients"]),
+                "mlflow-tracking-uri": mlflow.get_tracking_uri()})
+            result = strategy.start(grid=grid, initial_arrays=arrays, num_rounds=1,
+                                    train_config=config, evaluate_config=config)
+            if round_number not in results.train_metrics_clientapp:
+                raise RuntimeError("Round did not produce aggregated training metrics")
+            arrays = result.arrays
+            tracking.checkpoint(round_number, arrays, results)
+            results.final_state_dict = arrays.to_torch_state_dict()
+        results.finish(FederatedTrainingStatus.SUCCEEDED)
+    except KeyboardInterrupt:
+        results.finish(FederatedTrainingStatus.INTERRUPTED)
+        publish(results)
+        tracking.finish("KILLED")
+        return
+    except Exception as error:
+        results.finish(FederatedTrainingStatus.FAILED, error)
+        try:
+            publish(results)
+        except Exception as saving_error:
+            error.add_note(f"Publishing partial federated results also failed: {saving_error}")
+        tracking.finish("FAILED")
+        raise
+    publish(results)
+    tracking.finish("FINISHED")

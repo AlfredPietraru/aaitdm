@@ -22,8 +22,11 @@ from torchvision.models import ResNet18_Weights, resnet18
 
 import isic_dataloaders
 from isic_dataloaders import DATA_DIR, CLASS_NAMES, ISICDataLoaders, ISICDataset
-from net_training.neural_network import TrainingResults, train_one_epoch, validate_one_epoch
+from net_training.neural_network import (
+    TrainingOneEpochResults, TrainingResults, train_one_epoch, validate_one_epoch,
+)
 from net_training.training_configuration import TrainingCFG
+from fl_isic.federated_cfg import FederatedCFG
 
 PROJECT_DIR = Path(isic_dataloaders.__file__).resolve().parent
 OUTPUT_DIR = PROJECT_DIR / "federated" / "outputs"
@@ -43,17 +46,17 @@ def build_model(pretrained: bool = False) -> nn.Module:
     return model
 
 
-def load_training_cfg(run_config: Mapping[str, Any]) -> TrainingCFG:
+def load_training_cfg(federated_cfg: FederatedCFG) -> TrainingCFG:
     """Baseline YAML settings with the federated run configuration applied on top."""
     with (PROJECT_DIR / "app-state" / "training_configuration.yaml").open(encoding="utf-8") as handle:
         data: dict[str, Any] = yaml.safe_load(handle)
     data.update(
-        batch_size=int(run_config["batch-size"]),
-        num_workers=int(run_config["num-workers"]),
-        seed=int(run_config["seed"]),
+        batch_size=federated_cfg.batch_size,
+        num_workers=federated_cfg.num_workers,
+        seed=federated_cfg.seed,
         optimizer_kwargs={
             **data.get("optimizer_kwargs", {}),
-            "lr": float(run_config["learning-rate"]),
+            "lr": federated_cfg.learning_rate,
         },
     )
     return TrainingCFG(data)
@@ -151,14 +154,13 @@ def partition(
 
 
 def client_datasets(
-    cfg: TrainingCFG, run_config: Mapping[str, Any], partition_id: int, num_partitions: int,
+    cfg: TrainingCFG, federated_cfg: FederatedCFG, partition_id: int, num_partitions: int,
 ) -> tuple[ISICDataset, ISICDataset]:
     """Return this client's local training and validation data."""
-    split_ratios = tuple(float(run_config[f"{split}-fraction"]) for split in SPLITS)
-    datasets = load_split(cfg, split_ratios)
+    datasets = load_split(cfg, federated_cfg.split_ratios)
     train, val = partition(
-        datasets, num_partitions, str(run_config["partitioning"]),
-        float(run_config["dirichlet-alpha"]), cfg.seed,
+        datasets, num_partitions, federated_cfg.partitioning,
+        federated_cfg.dirichlet_alpha, cfg.seed,
     )
     return tuple(
         ISICDataset(
@@ -167,7 +169,7 @@ def client_datasets(
             transform=datasets[split].transform,
         )
         for split, indices in (("train", train), ("val", val))
-    )
+    ) # type: ignore
 
 
 def class_counts(dataset: ISICDataset) -> dict[str, int]:
@@ -208,6 +210,7 @@ class ProximalLoss(nn.Module):
 
 def local_train(
     model: nn.Module, loader: DataLoader, cfg: TrainingCFG, epochs: int, mu: float, label: str,
+    on_epoch=None,
 ) -> TrainingResults:
     """Run E local epochs from the received global weights and retain their history."""
     device = get_device()
@@ -216,21 +219,28 @@ def local_train(
     optimizer = cfg.optimizer(model.parameters(), **cfg.optimizer_kwargs)
     if epochs < 1:
         raise ValueError("Local training requires at least one epoch.")
-    metrics = TrainingResults(split="train")
+    metrics = TrainingResults(total_epochs=epochs)
+    metrics.initialize(cfg)
+    metrics.total_epochs = epochs
     for epoch in range(1, epochs + 1):
         epoch_results = train_one_epoch(
             model, loader, optimizer, criterion, device,
         )
-        metrics.extend(epoch_results)
+        metrics.add_epoch_results(epoch_results)
+        if on_epoch is not None:
+            on_epoch(epoch, epoch_results)
     return metrics
 
 
-def evaluate(model: nn.Module, loader: DataLoader, cfg: TrainingCFG, label: str) -> TrainingResults:
+def evaluate(model: nn.Module, loader: DataLoader, cfg: TrainingCFG, label: str) -> TrainingOneEpochResults:
     device = get_device()
     model.to(device)
     return validate_one_epoch(model, loader, cfg.loss_function.to(device), device)
 
 
-def scalar_metrics(metrics: TrainingResults, keys: tuple[str, ...]) -> dict[str, float]:
-    scalars = metrics.scalar_metrics()
+def scalar_metrics(
+    metrics: TrainingResults | TrainingOneEpochResults, keys: tuple[str, ...],
+) -> dict[str, float]:
+    latest = metrics.train_results[-1] if isinstance(metrics, TrainingResults) else metrics
+    scalars = latest.scalar_metrics()
     return {key: float(scalars[key]) for key in keys if math.isfinite(scalars[key])}

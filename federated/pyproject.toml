@@ -24,24 +24,5 @@ publisher = "aitdm"
 serverapp = "fl_isic.server_app:app"
 clientapp = "fl_isic.client_app:app"
 
-# Override any value at launch, e.g. ./run_federated.sh num-server-rounds=10 proximal-mu=0.01
+# Runtime settings come from app-state/federated_configuration.yaml via the launcher.
 [tool.flwr.app.config]
-num-server-rounds = 10
-local-epochs = 2
-fraction-train = 1.0
-# Number of clients the server waits for; run_federated.sh sets it to NUM_CLIENTS.
-min-nodes = 3
-# 0.0 runs FedAvg; a positive value runs FedProx with this mu.
-proximal-mu = 0.0
-# "iid" or "dirichlet" (label skew; smaller alpha = more non-IID).
-partitioning = "dirichlet"
-dirichlet-alpha = 0.5
-# Same lesion-group split as the centralized baseline in app-state/training_configuration.yaml.
-# Clients get shares of train and val; the test split is held back and never used here.
-train-fraction = 0.3
-val-fraction = 0.1
-test-fraction = 0.1
-batch-size = 32
-learning-rate = 0.0001
-num-workers = 2
-seed = 42
