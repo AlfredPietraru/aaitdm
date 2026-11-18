@@ -98,6 +98,22 @@ class TrainingCFG:
                 "Scheduler patience must be a non-negative integer."
             )
 
+    def to_dict(self) -> dict[str, Any]:
+        """Export resolved settings without serializing runtime Python components."""
+        return deepcopy({
+            "optimizer": self.optimizer.__name__, "optimizer_kwargs": self.optimizer_kwargs,
+            "batch_size": self.batch_size, "num_workers": self.num_workers, "seed": self.seed,
+            "loss_function": type(self.loss_function).__name__,
+            "loss_function_kwargs": self.data.get("loss_function_kwargs", {}),
+            "epochs": self.epochs,
+            "scheduler_type": self.scheduler_type.__name__ if self.scheduler_type else None,
+            "scheduler_kwargs": self.scheduler_kwargs,
+            "early_stopping_patience": self.early_stopping_patience,
+            "early_stopping_tolerance": self.early_stopping_tolerance,
+            "train_transforms": self.data.get("train_transforms", self._default_transforms()),
+            "val_transforms": self.data.get("val_transforms", self._default_transforms()),
+        })
+
     @staticmethod
     def _default_transforms() -> list[dict[str, Any]]:
         return [

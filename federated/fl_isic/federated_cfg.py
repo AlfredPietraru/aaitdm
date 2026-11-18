@@ -17,12 +17,9 @@ class FederatedCFG:
 
     resume_experiment_id: str = ""
     num_server_rounds: int = 10
+    early_stopping_patience: int = 3
     local_epochs: int = 2
-    fraction_train: float = 1.0
-    fraction_evaluate: float = 1.0
     min_nodes: int = 3
-    min_train_nodes: int = 1
-    min_evaluate_nodes: int = 1
     proximal_mu: float = 0.0
     partitioning: str = "dirichlet"
     dirichlet_alpha: float = 0.5
@@ -50,8 +47,7 @@ class FederatedCFG:
         """Reject invalid execution settings before starting Flower processes."""
         if not isinstance(self.resume_experiment_id, str):
             raise ValueError("resume-experiment-id must be a string.")
-        for name in ("num_server_rounds", "local_epochs", "min_nodes", "min_train_nodes",
-                     "min_evaluate_nodes", "batch_size"):
+        for name in ("num_server_rounds", "early_stopping_patience", "local_epochs", "min_nodes", "batch_size"):
             if type(getattr(self, name)) is not int or getattr(self, name) < 1:
                 raise ValueError(f"{name} must be a positive integer.")
         for name in ("num_workers", "seed"):
@@ -59,16 +55,12 @@ class FederatedCFG:
                 raise ValueError(f"{name} must be a non-negative integer.")
         if self.seed >= 2**32:
             raise ValueError("seed must be less than 2**32.")
-        for name in ("fraction_train", "fraction_evaluate", "proximal_mu", "dirichlet_alpha",
+        for name in ("proximal_mu", "dirichlet_alpha",
                      "train_fraction", "val_fraction", "test_fraction", "learning_rate"):
             value = getattr(self, name)
             if type(value) not in (int, float) or not math.isfinite(value):
                 raise ValueError(f"{name} must be a finite number.")
             setattr(self, name, float(value))
-        if not 0 < self.fraction_train <= 1 or not 0 <= self.fraction_evaluate <= 1:
-            raise ValueError("Participation fractions must be within [0, 1], with training > 0.")
-        if self.min_train_nodes > self.min_nodes or self.min_evaluate_nodes > self.min_nodes:
-            raise ValueError("Minimum training/evaluation nodes cannot exceed min-nodes.")
         if self.proximal_mu < 0 or self.dirichlet_alpha <= 0 or self.learning_rate <= 0:
             raise ValueError("proximal-mu must be non-negative; alpha and learning rate must be positive.")
         if self.partitioning not in ("iid", "dirichlet"):
@@ -99,10 +91,6 @@ class FederatedCFG:
         """Build the shared FedAvg/FedProx arguments with runtime callbacks."""
         self.validate()
         return {
-            "fraction_train": self.fraction_train,
-            "fraction_evaluate": self.fraction_evaluate,
-            "min_train_nodes": self.min_train_nodes,
-            "min_evaluate_nodes": self.min_evaluate_nodes,
             "min_available_nodes": self.min_available_nodes,
             "train_metrics_aggr_fn": train_metrics_aggr_fn,
             "evaluate_metrics_aggr_fn": evaluate_metrics_aggr_fn,

@@ -4,13 +4,15 @@ The shared net_training package lives in the project root, which must be on
 PYTHONPATH; run_federated.sh sets it.
 """
 
+from __future__ import annotations
+
 from collections import Counter, defaultdict
 from collections.abc import Mapping
 import json
 import math
 import os
 from pathlib import Path
-from typing import Any
+from typing import Any, TYPE_CHECKING
 
 import numpy as np
 import torch
@@ -26,7 +28,8 @@ from net_training.neural_network import (
     TrainingOneEpochResults, TrainingResults, train_one_epoch, validate_one_epoch,
 )
 from net_training.training_configuration import TrainingCFG
-from fl_isic.federated_cfg import FederatedCFG
+if TYPE_CHECKING:
+    from fl_isic.federated_cfg import FederatedCFG
 
 PROJECT_DIR = Path(isic_dataloaders.__file__).resolve().parent
 OUTPUT_DIR = PROJECT_DIR / "federated" / "outputs"
@@ -66,8 +69,8 @@ def load_split(cfg: TrainingCFG, split_ratios: tuple[float, float, float]) -> di
     """Return the baseline lesion-separated split, cached as JSON.
 
     Indexing ISIC checks every image file, which takes about a minute on a
-    Windows drive mounted in WSL. Clients that start together may each build
-    the cache once; the atomic replace keeps the file consistent.
+    Windows drive mounted in WSL. The server builds this cache before assigning
+    data to clients; atomic replacement keeps concurrent launches consistent.
     """
     ratios = "-".join(f"{ratio:g}" for ratio in split_ratios)
     cache = OUTPUT_DIR / "cache" / f"split-data-seed{cfg.seed}-{ratios}.json"
@@ -135,7 +138,7 @@ def partition(
     "iid" gives every client the same class mix. "dirichlet" draws each class's
     split across clients from Dir(alpha): smaller alpha means more label skew.
     A client keeps the same class mix for its training and validation data.
-    Every client process recomputes this and gets the same result.
+    The server computes this once and persists the assignments.
     """
     rng = np.random.default_rng(seed)
     num_classes = len(CLASS_NAMES)
@@ -153,23 +156,18 @@ def partition(
     raise RuntimeError("Could not give every client data; increase dirichlet-alpha or the data fractions.")
 
 
-def client_datasets(
-    cfg: TrainingCFG, federated_cfg: FederatedCFG, partition_id: int, num_partitions: int,
-) -> tuple[ISICDataset, ISICDataset]:
-    """Return this client's local training and validation data."""
-    datasets = load_split(cfg, federated_cfg.split_ratios)
-    train, val = partition(
-        datasets, num_partitions, federated_cfg.partitioning,
-        federated_cfg.dirichlet_alpha, cfg.seed,
-    )
-    return tuple(
-        ISICDataset(
-            [datasets[split].samples[i] for i in indices[partition_id]],
-            [datasets[split].groups[i] for i in indices[partition_id]],
-            transform=datasets[split].transform,
-        )
-        for split, indices in (("train", train), ("val", val))
-    ) # type: ignore
+def dataset_from_references(samples, transform):
+    """Resolve server-assigned image IDs against this machine's dataset root."""
+    root = DATA_DIR / "ISIC_2019_Training_Input"
+    # Match ISICDataLoaders: archives may contain another directory of this name.
+    nested = root / "ISIC_2019_Training_Input"
+    if nested.is_dir():
+        root = nested
+    paths = [(root / sample.sample_id, sample.label) for sample in samples]
+    missing = next((path for path, _ in paths if not path.is_file()), None)
+    if missing is not None:
+        raise FileNotFoundError(f"Assigned image is missing locally: {missing}")
+    return ISICDataset(paths, [sample.group for sample in samples], transform=transform)
 
 
 def class_counts(dataset: ISICDataset) -> dict[str, int]:
@@ -244,3 +242,25 @@ def scalar_metrics(
     latest = metrics.train_results[-1] if isinstance(metrics, TrainingResults) else metrics
     scalars = latest.scalar_metrics()
     return {key: float(scalars[key]) for key in keys if math.isfinite(scalars[key])}
+
+
+class GlobalModelEvaluator:
+    """Evaluate aggregated weights on all three fixed splits without augmentation."""
+
+    def __init__(self, federated_cfg: FederatedCFG = None, *, training_cfg=None, datasets=None):
+        self.cfg = training_cfg if training_cfg is not None else load_training_cfg(federated_cfg)
+        if datasets is None:
+            datasets = load_split(self.cfg, federated_cfg.split_ratios)
+        self.loaders = {}
+        for split, dataset in datasets.items():
+            evaluation_data = ISICDataset(dataset.samples, dataset.groups,
+                                          transform=self.cfg.val_transforms)
+            self.loaders[split] = make_loader(evaluation_data, self.cfg, shuffle=False,
+                                             seed=self.cfg.seed)
+        self.model = build_model()
+
+    def evaluate(self, arrays) -> dict[str, dict[str, float]]:
+        self.model.load_state_dict(arrays.to_torch_state_dict())
+        return {split: scalar_metrics(evaluate(self.model, loader, self.cfg,
+                                               f"Global model - {split}"), CLIENT_METRICS)
+                for split, loader in self.loaders.items()}

@@ -229,6 +229,7 @@ class MLflowLogger:
             ("val", results.evaluate_metrics_clientapp),
             ("server", results.evaluate_metrics_serverapp),
         ]
+        histories.extend((f"global.{split}", history) for split, history in results.global_metrics.items())
         histories.extend(
             (f"clients.{client_id}.{phase}", history)
             for phase, clients in results.per_client.items() for client_id, history in clients.items()
@@ -250,9 +251,8 @@ class MLflowLogger:
     def log_federated_artifacts(
         self, experiment_id: str, run_id: str, results: "FederatedTrainingResults",
     ) -> None:
-        """Replace live plots/history at stable paths and upload available weights."""
+        """Replace live plots/history; FederatedTracking owns the global checkpoint."""
         from federated.fl_isic.federated_plotter import FederatedPlotter
-        import torch
 
         client = MlflowClient()
         report = {"experiment_id": experiment_id, "run_id": run_id, **results.to_dict()}
@@ -260,19 +260,13 @@ class MLflowLogger:
         client.log_text(run_id, json.dumps(safe, indent=2, allow_nan=False) + "\n",
                         "federated/results.json")
         client.log_dict(run_id, results.configuration.to_dict(), "federated/configuration.json")
-        figures = FederatedPlotter(results).plot_all()
+        figures = FederatedPlotter.plot_all(results)
         try:
             for name, figure in figures.items():
                 client.log_figure(run_id, figure, f"federated/{name}")
         finally:
             for figure in figures.values():
                 figure.clear()
-        if results.final_state_dict is not None:
-            with TemporaryDirectory() as directory:
-                path = Path(directory) / "global_model.pt"
-                torch.save(results.final_state_dict, path)
-                client.log_artifact(run_id, str(path), artifact_path="federated")
-
     def log_federated_status(
         self, experiment_id: str, run_id: str, results: "FederatedTrainingResults",
     ) -> None:
@@ -282,6 +276,10 @@ class MLflowLogger:
         client.set_tag(run_id, "training_status", state)
         client.set_tag(run_id, "strategy", results.strategy)
         client.set_tag(run_id, "rounds_completed", str(results.rounds_completed))
+        client.set_tag(run_id, "stop_reason", results.stop_reason or "running")
+        if results.early_stopping:
+            client.set_tag(run_id, "early_stopping_bad_rounds", str(results.early_stopping["bad_rounds"]))
+            client.set_tag(run_id, "early_stopping_best_round", str(results.early_stopping["best_round"]))
         if results.failure_reason is not None:
             client.set_tag(run_id, "error_message", results.failure_reason[:1000])
         status = {"succeeded": "FINISHED", "failed": "FAILED", "interrupted": "KILLED"}.get(state)

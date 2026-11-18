@@ -39,9 +39,13 @@ class FederatedTrainingResults:
     evaluate_metrics_clientapp: RoundHistory = field(default_factory=dict)
     evaluate_metrics_serverapp: RoundHistory = field(default_factory=dict)
     per_client: dict[str, ClientHistory] = field(default_factory=lambda: {"train": {}, "val": {}})
+    global_metrics: dict[str, RoundHistory] = field(default_factory=lambda: {"train": {}, "val": {}, "test": {}})
+    class_distributions: dict = field(default_factory=dict)
     final_state_dict: "dict[str, torch.Tensor] | None" = field(default=None, repr=False)
     status: FederatedTrainingStatus = FederatedTrainingStatus.RUNNING
     failure_reason: str | None = None
+    stop_reason: str | None = None
+    early_stopping: dict = field(default_factory=dict)
     started_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     ended_at: datetime | None = None
 
@@ -100,6 +104,10 @@ class FederatedTrainingResults:
     def to_dict(self) -> dict:
         """Serialize metadata and histories; model weights are saved separately."""
         return {
+            "stop_reason": self.stop_reason,
+            "early_stopping": deepcopy(self.early_stopping),
+            "global_metrics": deepcopy(self.global_metrics),
+            "class_distributions": deepcopy(self.class_distributions),
             "strategy": self.strategy,
             "run_config": self.configuration.to_dict(),
             "status": self.status.value,
